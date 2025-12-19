@@ -1,0 +1,84 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/typescript-node
+{
+  "name": "Node22 & TS, JDK21, Python3",
+  // "build": {
+  // 	"dockerfile": "Dockerfile",
+  // 	"imageName": "reg.enjo.tech/dev-container/vsc-tsnode:22-bookworm-amd64",
+  // 	"platform": "linux/arm64"
+  // },
+  // "dockerComposeFile": "docker-compose.yml",
+  // "service": "devsvc",	// Which service in the docker-compose.yml file is the Dev Container.
+  // "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "image": "reg.enjo.tech/dev-container/dev-tsnode:22-bookworm-amd64",
+  // 2375 port : Docker daemon port for interactive from host.
+  "forwardPorts": [22, 3000, 3030, 4173, 5173, 8080, 8888, 9229],
+
+  "mounts": [
+    // Customize the whole user home directory for the dev container :
+    // 1. Make a home folder in any place of the host you like for the node user in the dev container.
+    // 2. Assign the folder to the DEV_HOME environment variable in your shell (ex: .bashrc or .zshrc).
+    // 3. Un-comment the next line to map the folder into your dev container.
+    // "source=${localEnv:DEV_HOME},target=/home/node,type=bind",
+    //
+    // Map specific files into node user's home directory of the dev container.
+    // 1. Link specific files to the /Users folder by root privilege.
+    // 2. Map each file and folder into the dev container.
+    // 3. (Optional) Create volumes for sharing docker-in-docker and container contents.
+    //      (issue "docker volume create dind containerd" in terminal).
+    "source=/home/dev_bind/gitconfig,target=/home/node/.gitconfig,type=bind",
+    "source=/home/dev_bind/ssh,target=/home/node/.ssh,type=bind",
+    "source=/home/dev_bind/zshrc,target=/home/node/.zshrc,type=bind",
+    "source=/home/dev_bind/zshrc,target=/root/.zshrc,type=bind",
+    "source=containerd,target=/var/lib/containerd,type=volume",
+    "source=dind,target=/var/lib/docker,type=volume"
+  ],
+  "runArgs": [
+    "--dns-search=rd.enjo.tech",
+    "--dns-search=enjo.tech",
+    "--hostname=dev-rpc.js",
+    "--name=dev-rpc.js",
+    "--privileged" // Required for Docker-in-Docker.
+  ],
+
+  // ===>>  To build a devcontainer image  <<===
+  // 1. Comment "mounts" and "runArgs" blocks, and uncomment "features" and "customizations" blocks.
+  // 2. Make sure the "docker-in-docker" feature is disabled and "docker-outside-of-docker" enabled.
+  // 3. Open folder in devcontainer with the "reg.enjo.tech/vsc-tsnode:22-bookworm-amd64" image.
+  // 4. Enable "docker-in-docker" and disable "docker-outside-of-docker" feature.
+  // 5. Build devcontainer image :
+  //    > devcontainer build --workspace-folder . --image-name reg.enjo.tech/dev-tsnode:22-bookworm-amd64
+  // 6. Push the image to reg.enjo.tech.
+  //    > docker push reg.enjo.tech/dev-tsnode:22-bookworm-amd64
+  // ===========================================
+
+  // "features": {
+  //   // "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+  //   "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {},
+  //   "ghcr.io/devcontainers-extra/features/devcontainers-cli:1": {}
+  //   // "ghcr.io/msclock/features/gitlab-ci-local:0": {},		       // Only x64 is supported at this time.
+  //   // "ghcr.io/gvatsal60/dev-container-features/sonarlint:1": {} // This upgrades node.js to v24@latest.
+  // },
+  // "customizations": {
+  //   "vscode": {
+  //     "extensions": [
+  //       "chakrounanas.turbo-console-log",
+  //       "continue.continue",
+  //       "crystal-spider.jsdoc-generator",
+  //       "donjayamanne.githistory",
+  //       "esbenp.prettier-vscode",
+  //       "gitlab.gitlab-workflow",
+  //       "inferrinizzard.prettier-sql-vscode",
+  //       "mhutchie.git-graph",
+  //       "postman.postman-for-vscode",
+  //       "sonarsource.sonarlint-vscode",
+  //       "yoavbls.pretty-ts-errors"
+  //     ]
+  //   }
+  // },
+
+  // Use 'postCreateCommand' to run commands after the container is created.
+  // "postCreateCommand": ". /usr/local/share/nvm/nvm.sh && nvm alias default $NODE_VERSION && nvm use default",
+
+  "remoteUser": "node"
+}

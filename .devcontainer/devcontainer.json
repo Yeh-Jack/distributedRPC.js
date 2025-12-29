@@ -26,10 +26,10 @@
     // 2. Map each file and folder into the dev container.
     // 3. (Optional) Create volumes for sharing docker-in-docker and container contents.
     //      (issue "docker volume create dind containerd" in terminal).
-    "source=/home/dev_bind/gitconfig,target=/home/node/.gitconfig,type=bind",
-    "source=/home/dev_bind/ssh,target=/home/node/.ssh,type=bind",
-    "source=/home/dev_bind/zshrc,target=/home/node/.zshrc,type=bind",
-    "source=/home/dev_bind/zshrc,target=/root/.zshrc,type=bind",
+    //"source=/home/dev_bind/gitconfig,target=/home/node/.gitconfig,type=bind",
+    //"source=/home/dev_bind/ssh,target=/home/node/.ssh,type=bind",
+    //"source=/home/dev_bind/zshrc,target=/home/node/.zshrc,type=bind",
+    //"source=/home/dev_bind/zshrc,target=/root/.zshrc,type=bind",
     "source=containerd,target=/var/lib/containerd,type=volume",
     "source=dind,target=/var/lib/docker,type=volume"
   ],

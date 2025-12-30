@@ -8,6 +8,7 @@ export class NetworkServer extends EventEmitter {
     super();
     this.ip = ip;
 
+    // bad
     if (port === -1) {
       if (this.constructor.name === "UDPServer") {
         this.port = Number.parseInt(process.env.UDP_PORT_SM);

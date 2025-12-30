@@ -100,7 +100,7 @@ export class TCPServer extends NetworkServer {
       );
     });
 
-    this.server.listen(this.port, () => {
+    this.server.listen(this.port, '0.0.0.0', () => {
       console.log(`[TCP] Server listening on port ${this.port}...`);
     });
   }

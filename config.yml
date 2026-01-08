@@ -1,0 +1,15 @@
+app:
+
+core:
+  retry_interval: 5000
+  retry_max: 0
+  service_name: ServiceManager
+  tcp_address: 0.0.0.0
+  tcp_port: 2736
+  udp_address: 0.0.0.0
+  udp_port: 5707
+
+log:
+  log_level: info
+  max_files: 14d
+  max_size: 20m

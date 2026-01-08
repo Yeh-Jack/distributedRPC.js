@@ -1,4 +1,4 @@
-import { createServer, Server, Socket as TcpSocket } from "net";
+import dgram, { Socket as UdpSocket, RemoteInfo } from "dgram";
 import { Logger } from "winston";
 
 import { isAbortError } from "../common/abort-aware";
@@ -16,13 +16,13 @@ import {
 
 const RETRYABLE_ERRORS = new Set(["EADDRINUSE", "EADDRNOTAVAIL", "ENETDOWN"]);
 
-export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
+export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   private configManager: ConfigManager = ConfigManager.getInstance();
   private logger: Logger = LoggerManager.getInstance().getLogger();
 
   private abortController!: AbortController;
   private retryScheduler!: RetryScheduler;
-  private server: Server | null = null;
+  private socket: UdpSocket | null = null;
 
   private state: ServerState = ServerState.Stopped;
   private address!: string;
@@ -41,18 +41,18 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   }
 
   public getPort(): number {
-    return this.port; // dynamically assigned if configured port = 0
+    return this.port;
   }
 
   public async start(): Promise<void> {
     if (this.state !== ServerState.Stopped) return;
 
     const config = this.configManager.getCoreConfig();
-    this.address = config.tcp_address;
-    this.port = config.tcp_port; // Default to 0.
+    this.address = config.udp_address;
+    this.port = config.udp_port; // Default to 5707.
     this.abortController = new AbortController();
 
-    this.retryScheduler = new RetryScheduler(() => this.attemptListen(), {
+    this.retryScheduler = new RetryScheduler(() => this.attemptBind(), {
       intervalMs: config.retry_interval,
       maxRetries: config.retry_max,
       signal: this.abortController.signal,
@@ -72,7 +72,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     this.setState(ServerState.Starting);
 
     this.logger.info(
-      `Initializing TCP listener "${this.listenerName}" on ${this.address}:${this.port}`
+      `Initializing UDP listener "${this.listenerName}" on ${this.address}:${this.port}`
     );
 
     try {
@@ -82,7 +82,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
       if (isAbortError(err)) {
         // Cancellation is not a failure.
         this.setState(ServerState.Stopped);
-        this.logger.info("TCP server start aborted.");
+        this.logger.info("UDP server start aborted.");
         return;
       }
       this.setState(ServerState.Error);
@@ -93,60 +93,51 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   public async stop(): Promise<void> {
     if (this.state === ServerState.Stopped) return;
 
-    this.logger.info("Stopping TCP server...");
+    this.logger.info("Stopping UDP server...");
     this.setState(ServerState.Stopped);
 
     this.abortController.abort();
     this.retryScheduler?.stop();
 
-    if (!this.server) return;
+    if (!this.socket) return;
 
-    await new Promise<void>((resolve, reject) => {
-      this.server!.close((err) => {
-        if (err) {
-          this.emit("error", { error: err });
-          reject(err);
-        } else {
-          resolve();
-        }
-      });
-    });
-
-    this.server = null;
+    this.socket.close();
+    this.socket = null;
   }
 
   // -------------------------------
-  // Single attempt to listen
+  // Single attempt to bind
   // -------------------------------
 
-  private async attemptListen(): Promise<void> {
+  private async attemptBind(): Promise<void> {
     if (this.state === ServerState.Stopped) {
       throw new DOMException("Aborted", "AbortError");
     }
 
     return new Promise<void>((resolve, reject) => {
       try {
-        this.server = createServer((socket) => this.handleConnection(socket));
+        this.socket = dgram.createSocket("udp4");
 
         const cleanup = () => {
-          this.server?.off(NetworkEvent.Listening, onListening);
-          this.server?.off(NetworkEvent.Error, onError);
-          this.server?.off(NetworkEvent.Close, onClose);
+          this.socket?.off(NetworkEvent.Listening, onListening);
+          this.socket?.off(NetworkEvent.Error, onError);
+          this.socket?.off(NetworkEvent.Close, onClose);
+          this.socket?.off(NetworkEvent.Message, onMessage);
         };
 
         const onListening = () => {
           cleanup();
 
           // Update port if ephemeral (listen port is 0).
-          const addr = this.server!.address();
-          if (addr && typeof addr === "object") {
+          const addr = this.socket!.address();
+          if (typeof addr === "object") {
             this.port = addr.port;
           }
 
           this.setState(ServerState.Listening);
-          this.retryScheduler.reset(); // reset attempts after success
+          this.retryScheduler.reset();
           this.logger.info(
-            `TCP server listening on ${this.address}:${this.port}`
+            `UDP server listening on ${this.address}:${this.port}`
           );
           this.emit(NetworkEvent.Listening);
           resolve();
@@ -154,33 +145,45 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
 
         const onError = (err: NodeJS.ErrnoException) => {
           cleanup();
-          this.server?.close();
+          this.socket?.close();
 
           if (RETRYABLE_ERRORS.has(err.code ?? "")) {
-            reject(err); // Reject triggers retry loop, the RetryScheduler.run() will retry.
+            reject(err);
           } else {
             this.setState(ServerState.Error);
             this.emit(NetworkEvent.Error, {
               error: err,
               peer: undefined as any,
             });
-            reject(err); // Fatal, do not retry.
+            reject(err);
           }
         };
 
         const onClose = () => {
           cleanup();
           if (this.state !== ServerState.Stopped) {
-            this.logger.warn("Server closed unexpectedly, retrying ...");
-            reject(new Error("Server closed unexpectedly."));
+            this.logger.warn("UDP socket closed unexpectedly, retrying ...");
+            reject(new Error("UDP socket closed unexpectedly."));
           }
         };
 
-        this.server.once(NetworkEvent.Listening, onListening);
-        this.server.once(NetworkEvent.Error, onError);
-        this.server.once(NetworkEvent.Close, onClose);
+        const onMessage = (msg: Buffer, rinfo: RemoteInfo) => {
+          const peer: NetworkPeer = {
+            protocol: NetworkProtocol.UDP,
+            socket: this.socket!,
+            address: rinfo.address,
+            port: rinfo.port,
+          };
 
-        this.server.listen(this.port, this.address);
+          this.emit(NetworkEvent.Message, { peer, data: msg });
+        };
+
+        this.socket.once(NetworkEvent.Listening, onListening);
+        this.socket.once(NetworkEvent.Error, onError);
+        this.socket.once(NetworkEvent.Close, onClose);
+        this.socket.on(NetworkEvent.Message, onMessage);
+
+        this.socket.bind(this.port, this.address);
       } catch (err) {
         this.setState(ServerState.Error);
         reject(err);
@@ -188,35 +191,9 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     });
   }
 
-  private handleConnection(socket: TcpSocket): void {
-    const address = socket.remoteAddress || "";
-    const port = socket.remotePort || 0;
-    const peer: NetworkPeer = {
-      protocol: NetworkProtocol.TCP,
-      socket,
-      address,
-      port,
-    };
-
-    this.emit(NetworkEvent.Connection, { peer });
-
-    socket.on(NetworkEvent.Data, (data) => {
-      this.emit(NetworkEvent.Data, { peer, data });
-      socket.write(`Echo: ${data.toString()}`);
-    });
-
-    socket.on(NetworkEvent.Close, (hadError) => {
-      this.emit(NetworkEvent.Close, { peer, hadError });
-    });
-
-    socket.on(NetworkEvent.Error, (err) => {
-      this.emit(NetworkEvent.Error, { error: err, peer });
-    });
-  }
-
   private setState(state: ServerState) {
     if (this.state !== state) {
-      this.logger.info(`TCP server state: ${this.state} → ${state}`);
+      this.logger.info(`UDP server state: ${this.state} → ${state}`);
       this.state = state;
     }
   }

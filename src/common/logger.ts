@@ -5,7 +5,7 @@ import { ConfigManager } from "./config";
 
 export class LoggerManager {
   private static instance: LoggerManager;
-  private logger: winston.Logger | null = null;
+  private logger!: winston.Logger;
   private configManager: ConfigManager;
 
   private constructor() {
@@ -58,6 +58,11 @@ export class LoggerManager {
   }
 
   public getLogger(): winston.Logger {
+    if (!this.logger) {
+      throw new Error(
+        "The Logger is not initialized yet. Call reload() first."
+      );
+    }
     return this.logger;
   }
 }

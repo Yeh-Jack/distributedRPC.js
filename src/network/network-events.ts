@@ -16,11 +16,15 @@ export enum NetworkEvent {
 }
 
 export enum ServerState {
-  Stopped = "Stopped",
-  Starting = "Starting",
+  Error = "Error",
+  Halt = "Halt",
+  Halting = "Halting",
   Listening = "Listening",
   Retrying = "Retrying",
-  Error = "Error",
+  Running = "Running",
+  Starting = "Starting",
+  Stopping = "Stopping",
+  Stopped = "Stopped",
 }
 
 export type NetworkPeer =

@@ -18,13 +18,14 @@ ARG DEF_SHELL="/bin/zsh"
 # Define the local deployed LLM server.
 ARG LLM_HOST="llm.enjo.tech"
 ARG LLM_PORT=443
+ARG PNPM_VERSION=10.28.0
 # Make Node.js default to version 22.
 ENV NODE_VERSION=22
 RUN \
     # Install the specific version of node.js and pnpm, and configure corepack.
     su node -c ". /usr/local/share/nvm/nvm.sh && nvm install --default ${NODE_VERSION} && nvm use default" && \
-    npm install -g pnpm@10.20.0 && \
-    corepack enable && corepack use pnpm@10.20.0 && \
+    npm install -g pnpm@$PNPM_VERSION && \
+    corepack enable && corepack use pnpm@$PNPM_VERSION && \
     # Change default shell from bash to zsh for the root and node users only.
     sed -i -E "s|^(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:).*|\1$DEF_SHELL|" /etc/passwd && \
     sed -i -E "s|^(node:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:).*|\1$DEF_SHELL|" /etc/passwd

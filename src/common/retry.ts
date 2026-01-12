@@ -1,4 +1,5 @@
 import { isAbortError, sleep } from "./abort-aware";
+import { retryAttempts, retryDuration } from "../metrics/otel-metrics";
 
 export interface RetryContext {
   attempt: number;
@@ -46,6 +47,9 @@ export class RetryScheduler {
         await this.task();
         return; // Success.
       } catch (err) {
+        // Record retry metrics for OpenTelemetry.
+        retryAttempts.add(1, { attempt: this.attempt });
+
         if (isAbortError(err)) {
           throw err; // Cancellation is not a failure.
         }
@@ -63,6 +67,11 @@ export class RetryScheduler {
 
         this.options.onRetry?.(ctx);
         await this.waitWithAbort(err);
+      } finally {
+        // Record retry duration metrics for OpenTelemetry.
+        retryDuration.record(Date.now() - this.startTime, {
+          attempt: this.attempt,
+        });
       }
     }
   }

@@ -6,6 +6,7 @@ import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
 import { TypedEventEmitter } from "./typed-event-emitter";
+import { bytesCounter, listenerState } from "../metrics/otel-metrics";
 import {
   NetworkEvent,
   NetworkEventMap,
@@ -175,6 +176,13 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
             port: rinfo.port,
           };
 
+          // Update bytes received metric for OpenTelemetry.
+          bytesCounter.add(msg.length, {
+            protocol: NetworkProtocol.UDP,
+            "peer.address": peer.address,
+            "peer.port": peer.port,
+          });
+
           this.emit(NetworkEvent.Message, { peer, data: msg });
         };
 
@@ -193,6 +201,10 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
 
   private setState(state: ServerState) {
     if (this.state !== state) {
+      // Update server state metric for OpenTelemetry.
+      // ObservableGauge is an async instrument and cannot be updated directly; store the latest
+      // state on the gauge object for the observable callback to report.
+      (listenerState as any).latestState = state;
       this.logger.info(`UDP server state: ${this.state} → ${state}`);
       this.state = state;
     }

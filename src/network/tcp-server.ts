@@ -7,6 +7,11 @@ import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
 import { TypedEventEmitter } from "./typed-event-emitter";
 import {
+  activeConnections,
+  bytesCounter,
+  listenerState,
+} from "../metrics/otel-metrics";
+import {
   NetworkEvent,
   NetworkEventMap,
   NetworkPeer,
@@ -197,15 +202,25 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
       address,
       port,
     };
+    const connectionInfo = {
+      protocol: NetworkProtocol.TCP,
+      "peer.address": address,
+      "peer.port": port,
+    };
+
+    // Update connection metrics for OpenTelemetry.
+    activeConnections.add(1, connectionInfo);
 
     this.emit(NetworkEvent.Connection, { peer });
 
     socket.on(NetworkEvent.Data, (data) => {
+      bytesCounter.add(data.length, connectionInfo);
       this.emit(NetworkEvent.Data, { peer, data });
       socket.write(`Echo: ${data.toString()}`);
     });
 
     socket.on(NetworkEvent.Close, (hadError) => {
+      activeConnections.add(-1, connectionInfo);
       this.emit(NetworkEvent.Close, { peer, hadError });
     });
 
@@ -216,6 +231,10 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
 
   private setState(state: ServerState) {
     if (this.state !== state) {
+      // Update server state metric for OpenTelemetry.
+      // ObservableGauge is an async instrument and cannot be updated directly; store the latest
+      // state on the gauge object for the observable callback to report.
+      (listenerState as any).latestState = state;
       this.logger.info(`TCP server state: ${this.state} → ${state}`);
       this.state = state;
     }

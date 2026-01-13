@@ -15,18 +15,6 @@ export enum NetworkEvent {
   Error = "error",
 }
 
-export enum ServerState {
-  Error = "Error",
-  Halt = "Halt",
-  Halting = "Halting",
-  Listening = "Listening",
-  Retrying = "Retrying",
-  Running = "Running",
-  Starting = "Starting",
-  Stopping = "Stopping",
-  Stopped = "Stopped",
-}
-
 export type NetworkPeer =
   | {
       protocol: NetworkProtocol.TCP;

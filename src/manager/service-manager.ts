@@ -1,29 +1,45 @@
 import { Logger } from "winston";
 import { injectable } from "inversify";
 
+import {
+  BasalProtocol,
+  ServerState,
+  generateInstanceId,
+} from "../types/basal-protocol";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { listenerState } from "../metrics/otel-metrics";
 import { TcpServer } from "../network/tcp-server";
 import { UdpServer } from "../network/udp-server";
-import { ServerState } from "../network/network-events";
 
 @injectable()
 export class ServiceManager {
-  protected readonly SERVICE_NAME!: string;
+  public readonly PROTOCOL: BasalProtocol = {
+    protocol_ver: "1.0.0",
+    provider: {
+      id: generateInstanceId(),
+      name: this.constructor.name,
+      version: "1.0.0",
+    },
+  };
+
   private services: Map<string, any> = new Map();
   private state: ServerState = ServerState.Stopped;
   private configManager: ConfigManager;
   private logger: Logger;
 
   constructor() {
-    this.SERVICE_NAME = this.constructor.name;
-    this.configManager = ConfigManager.getInstance(this.SERVICE_NAME);
+    this.configManager = ConfigManager.getInstance(this.PROTOCOL.provider.name);
     this.logger = LoggerManager.getInstance().getLogger();
+
+    const svcName = this.configManager.getCoreConfig().service_name;
+    if (svcName && svcName !== this.PROTOCOL.provider.name) {
+      this.PROTOCOL.provider.name = svcName;
+    }
   }
 
   public async initialize(): Promise<void> {
-    this.logger.info(`Initializing ${this.SERVICE_NAME} ...`);
+    this.logger.info(`Initializing ${this.PROTOCOL.provider.name} ...`);
     this.setState(ServerState.Starting);
 
     // Initialize all services including TCP and UDP listeners in parallel.
@@ -32,7 +48,9 @@ export class ServiceManager {
       this.initializeUdpListener("reception"),
     ]);
 
-    this.logger.info(`${this.SERVICE_NAME} initialized successfully.`);
+    this.logger.info(
+      `${this.PROTOCOL.provider.name} initialized successfully.`
+    );
     this.setState(ServerState.Running);
   }
 
@@ -129,7 +147,7 @@ export class ServiceManager {
       // state on the gauge object for the observable callback to report.
       (listenerState as any).latestState = state;
       this.logger.info(
-        `${this.SERVICE_NAME} server state: ${this.state} → ${state}.`
+        `${this.PROTOCOL.provider.name} server state: ${this.state} → ${state}.`
       );
       this.state = state;
     }

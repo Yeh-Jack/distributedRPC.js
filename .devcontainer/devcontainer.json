@@ -12,7 +12,8 @@
   // "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "image": "reg.enjo.tech/dev-container/dev-tsnode:22-bookworm-amd64",
   // 2375 port : Docker daemon port for interactive from host.
-  "forwardPorts": [22, 3000, 3030, 4173, 5173, 8080, 8888, 9229],
+  // 9999 port : Vitest UI port.
+  "forwardPorts": [22, 3000, 3030, 4173, 5173, 8080, 8888, 9229, 9999],
 
   "mounts": [
     // Customize the whole user home directory for the dev container :

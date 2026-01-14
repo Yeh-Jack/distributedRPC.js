@@ -1,5 +1,7 @@
 import { randomBytes } from "crypto";
 
+export const UNKNOWN_SERVICE_NAME = "UnknownService";
+
 export enum ServerState {
   Error = "Error",
   Halt = "Halt",

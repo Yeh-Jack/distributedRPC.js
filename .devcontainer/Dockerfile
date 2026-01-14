@@ -28,7 +28,7 @@ RUN \
     corepack enable && corepack use pnpm@$PNPM_VERSION && \
     # Change default shell from bash to zsh for the root and node users only.
     sed -i -E "s|^(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:).*|\1$DEF_SHELL|" /etc/passwd && \
-    sed -i -E "s|^(node:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:).*|\1$DEF_SHELL|" /etc/passwd
+    sed -i -E "s|^(node:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:).*|\1$DEF_SHELL|" /etc/passwd && \
     # Construct a SSH local forwarding tunnel to $LLM_HOST if obsence.
 #    echo '#nvm alias default $NODE_VERSION && nvm use default\n\n\
 #LAN_LLM_HOST="$LLM_HOST"\n\
@@ -40,23 +40,33 @@ RUN \
 #    echo "Port $LLM_PORT is already listening."\n\
 #fi' >> /etc/zsh/zshrc && \
     # Add default LLaMA model configuration for Continue extension.
-#     mkdir /home/node/.continue && \
-# echo 'name: Local Config\n\
-# version: 1.0.0\n\
-# schema: v1\n\
-# models:\n\
-#   - name: Local Qwen3-Coder\n\
-#     provider: llama.cpp\n\
-#     model: Qwen3-Coder\n\
-#     apiBase: https://llm.enjo.tech\n\
-#     apiKey: 5e9cc49a9126a4b85be7c41aafc62499fa56a873ac4a94eb5e8d532ae3d50a2a\n\
-#     temperature: 0.4\n\
-#     roles:\n\
-#       - chat\n\
-#       - edit\n\
-#       - apply\n\
-#     capabilities:\n\
-#       - tool_use' > /home/node/.continue/config.yaml
+    mkdir /home/node/.continue && \
+echo 'name: Local Config\n\
+version: 1.0.0\n\
+schema: v1\n\
+models:\n\
+  - name: Local Qwen3-Coder\n\
+    provider: llama.cpp\n\
+    model: Qwen3-Coder\n\
+    apiBase: http://llm.enjo.tech:8080\n\
+    apiKey: 5e9cc49a9126a4b85be7c41aafc62499fa56a873ac4a94eb5e8d532ae3d50a2a\n\
+    temperature: 0.4\n\
+    roles:\n\
+      - chat\n\
+      - edit\n\
+      - apply\n\
+    capabilities:\n\
+      - tool_use\n\
+  - name: Local Qwen3-Completer\n\
+    provider: llama.cpp\n\
+    model: Qwen3-Completer\n\
+    apiBase: http://llm.enjo.tech:8088\n\
+    apiKey: 5e9cc49a9126a4b85be7c41aafc62499fa56a873ac4a94eb5e8d532ae3d50a2a\n\
+    temperature: 0.2\n\
+    roles:\n\
+      - autocomplete\n\
+    capabilities:\n\
+      - code_completion' > /home/node/.continue/config.yaml
 
 # The tslint, typescript and eslint are installed in the base image.
 #ARG NODE_MODULES="tslint-to-eslint-config typescript"

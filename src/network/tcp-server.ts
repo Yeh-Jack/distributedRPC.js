@@ -1,10 +1,10 @@
 import { createServer, Server, Socket as TcpSocket } from "net";
-import { Logger } from "winston";
 
 import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
+import { ServerState } from "../types/basal-protocol";
 import { TypedEventEmitter } from "./typed-event-emitter";
 import {
   activeConnections,
@@ -16,14 +16,14 @@ import {
   NetworkEventMap,
   NetworkPeer,
   NetworkProtocol,
-  ServerState,
 } from "./network-events";
 
 const RETRYABLE_ERRORS = new Set(["EADDRINUSE", "EADDRNOTAVAIL", "ENETDOWN"]);
 
 export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   private configManager: ConfigManager = ConfigManager.getInstance();
-  private logger: Logger = LoggerManager.getInstance().getLogger();
+  private logger: ReturnType<typeof LoggerManager.prototype.getLogger> =
+    LoggerManager.getInstance().getLogger();
 
   private abortController!: AbortController;
   private retryScheduler!: RetryScheduler;
@@ -33,8 +33,18 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   private address!: string;
   private port!: number;
 
+  private sockets: Set<TcpSocket> = new Set(); // For tracking active sockets.
+
   constructor(private readonly listenerName: string) {
     super();
+    // Prevent process crash if 'error' is emitted and no one is listening
+    this.on(ServerState.Error, (err) => {
+      this.logger.error(
+        `[${this.listenerName}] Internal Error: ${
+          err.error?.message || err.error
+        }`
+      );
+    });
   }
 
   // -------------------------------
@@ -104,20 +114,35 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     this.abortController.abort();
     this.retryScheduler?.stop();
 
-    if (!this.server) return;
-
-    await new Promise<void>((resolve, reject) => {
-      this.server!.close((err) => {
+    // Close the server (stops accepting NEW connections)
+    const closeServerPromise = new Promise<void>((resolve) => {
+      if (!this.server) return resolve();
+      this.server.close((err) => {
         if (err) {
-          this.emit("error", { error: err });
-          reject(err);
-        } else {
-          resolve();
+          // It's common for close() to error if the server was not open
+          // We log it but resolve anyway to ensure shutdown continues.
+          this.logger.warn("Server close error (ignoring)", { error: err });
         }
+        resolve();
       });
     });
 
-    this.server = null;
+    // Forcefully destroy all ACTIVE connections.
+    // Without this, server.close() waits for clients to disconnect manually
+    if (this.sockets.size > 0) {
+      this.logger.info(
+        `Destroying ${this.sockets.size} active connections ...`
+      );
+      for (const socket of this.sockets) {
+        if (!socket.destroyed) {
+          socket.destroy(); // Sends FIN, cleans up immediately
+        }
+      }
+      this.sockets.clear();
+    }
+
+    await closeServerPromise;
+    this.logger.info("TCP Server stopped.");
   }
 
   // -------------------------------
@@ -208,8 +233,8 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
       "peer.port": port,
     };
 
-    // Update connection metrics for OpenTelemetry.
-    activeConnections.add(1, connectionInfo);
+    this.sockets.add(socket); // Tracking the socket.
+    activeConnections.add(1, connectionInfo); // Update connection metrics for OpenTelemetry.
 
     this.emit(NetworkEvent.Connection, { peer });
 
@@ -222,10 +247,16 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     socket.on(NetworkEvent.Close, (hadError) => {
       activeConnections.add(-1, connectionInfo);
       this.emit(NetworkEvent.Close, { peer, hadError });
+      this.sockets.delete(socket); // Remove from tracking on close.
     });
 
     socket.on(NetworkEvent.Error, (err) => {
       this.emit(NetworkEvent.Error, { error: err, peer });
+
+      // Defensive: ensure the socket is destroyed on error to prevent leaks.
+      if (!socket.destroyed) {
+        socket.destroy();
+      }
     });
   }
 

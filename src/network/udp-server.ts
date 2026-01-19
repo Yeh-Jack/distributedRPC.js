@@ -1,10 +1,10 @@
 import dgram, { Socket as UdpSocket, RemoteInfo } from "dgram";
-import { Logger } from "winston";
 
 import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
+import { ServerState } from "../types/basal-protocol";
 import { TypedEventEmitter } from "./typed-event-emitter";
 import { bytesCounter, listenerState } from "../metrics/otel-metrics";
 import {
@@ -12,14 +12,14 @@ import {
   NetworkEventMap,
   NetworkPeer,
   NetworkProtocol,
-  ServerState,
 } from "./network-events";
 
 const RETRYABLE_ERRORS = new Set(["EADDRINUSE", "EADDRNOTAVAIL", "ENETDOWN"]);
 
 export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   private configManager: ConfigManager = ConfigManager.getInstance();
-  private logger: Logger = LoggerManager.getInstance().getLogger();
+  private logger: ReturnType<typeof LoggerManager.prototype.getLogger> =
+    LoggerManager.getInstance().getLogger();
 
   private abortController!: AbortController;
   private retryScheduler!: RetryScheduler;

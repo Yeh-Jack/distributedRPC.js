@@ -7,12 +7,13 @@ export enum NetworkProtocol {
 }
 
 export enum NetworkEvent {
-  Listening = "listening",
+  Close = "close",
   Connection = "connection",
   Data = "data",
-  Message = "message",
-  Close = "close",
   Error = "error",
+  Listening = "listening",
+  Message = "message",
+  Stop = "stop",
 }
 
 export type NetworkPeer =

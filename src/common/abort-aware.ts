@@ -37,7 +37,7 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
         clearTimeout(timer);
         reject(new DOMException("Aborted", "AbortError"));
       },
-      { once: true }
+      { once: true },
     );
   });
 }

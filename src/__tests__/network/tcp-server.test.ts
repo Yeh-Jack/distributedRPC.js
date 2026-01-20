@@ -5,7 +5,7 @@ import { ServerState } from "../../types/basal-protocol";
 import { TcpServer } from "../../network/tcp-server";
 import { ConfigManager } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
-import { sleep, isAbortError } from "../../common/abort-aware";
+import { sleep } from "../../common/abort-aware";
 
 vi.mock("net");
 vi.mock("../../common/config");
@@ -369,7 +369,7 @@ describe("TcpServer full coverage", () => {
     // Covers: if (!socket.destroyed) socket.destroy();
     expect(aliveSocket.destroy).toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ error: boom })
+      expect.objectContaining({ error: boom }),
     );
   });
 
@@ -393,25 +393,7 @@ describe("TcpServer full coverage", () => {
 
     // Error event still emitted
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ error: boom })
+      expect.objectContaining({ error: boom }),
     );
-  });
-});
-
-describe("abort-aware full coverage", () => {
-  it("sleep resolves normally", async () => {
-    await sleep(1);
-  });
-
-  it("sleep aborts", async () => {
-    const ac = new AbortController();
-    const p = sleep(50, ac.signal);
-    ac.abort();
-    await expect(p).rejects.toThrow(DOMException);
-  });
-
-  it("isAbortError branches", () => {
-    expect(isAbortError(new DOMException("x", "AbortError"))).toBe(true);
-    expect(isAbortError(new Error("x"))).toBe(false);
   });
 });

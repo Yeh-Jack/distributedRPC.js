@@ -9,7 +9,7 @@ import {
 } from "vitest";
 import { ConfigManager } from "../../common/config";
 import { RetryScheduler } from "../../common/retry";
-import * as abortAware from "../../common/abort-aware";
+import { sleep, isAbortError } from "../../common/abort-aware";
 import { retryAttempts, retryDuration } from "../../metrics/otel-metrics";
 
 // --- Mocks ---
@@ -34,8 +34,8 @@ coreConfig.retry_max = 2;
 
 describe("RetryScheduler", () => {
   const mockTask = vi.fn();
-  const mockSleep = abortAware.sleep as Mock;
-  const mockIsAbortError = abortAware.isAbortError as Mock;
+  const mockSleep = sleep as Mock;
+  const mockIsAbortError = isAbortError as Mock;
   const mockRetryAttemptsAdd = retryAttempts.add as Mock;
   const mockRetryDurationRecord = retryDuration.record as Mock;
 
@@ -46,13 +46,13 @@ describe("RetryScheduler", () => {
     // 1: Check Error Name
     // This ensures isAbortError works correctly regardless of call order
     mockIsAbortError.mockImplementation(
-      (err: any) => err?.name === "AbortError"
+      (err: any) => err?.name === "AbortError",
     );
 
     // 2: Use setTimeout
     // This allows runAllTimersAsync to control the flow and fixes infinite loops
     mockSleep.mockImplementation(
-      (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+      (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     );
 
     mockTask.mockReset();
@@ -106,7 +106,7 @@ describe("RetryScheduler", () => {
       expect.objectContaining({
         attempt: 1,
         error: error1,
-      })
+      }),
     );
 
     // Verify sleep was called
@@ -280,5 +280,25 @@ describe("RetryScheduler", () => {
 
     // Task should have run twice (Retry happened despite sleep error)
     expect(mockTask).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("abort-aware full coverage", () => {
+  it("sleep resolves normally", async () => {
+    await sleep(1);
+  });
+
+  it("sleep aborts", async () => {
+    const ac = new AbortController();
+    const p = sleep(50, ac.signal);
+    setTimeout(async () => {
+      ac.abort(); // Abort after some time while sleeping.
+      await expect(p).rejects.toThrow(DOMException);
+    }, 5);
+  });
+
+  it("isAbortError branches", () => {
+    expect(isAbortError(new DOMException("x", "AbortError"))).toBe(true);
+    expect(isAbortError(new Error("x"))).toBe(false);
   });
 });

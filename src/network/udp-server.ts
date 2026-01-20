@@ -12,9 +12,8 @@ import {
   NetworkEventMap,
   NetworkPeer,
   NetworkProtocol,
+  NetworkRetryable,
 } from "./network-events";
-
-const RETRYABLE_ERRORS = new Set(["EADDRINUSE", "EADDRNOTAVAIL", "ENETDOWN"]);
 
 export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   private configManager: ConfigManager = ConfigManager.getInstance();
@@ -23,9 +22,9 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
 
   private abortController!: AbortController;
   private retryScheduler!: RetryScheduler;
-  private socket: UdpSocket | null = null;
-
   private state: ServerState = ServerState.Stopped;
+
+  private socket: UdpSocket | null = null;
   private address!: string;
   private port!: number;
 
@@ -49,9 +48,9 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     if (this.state !== ServerState.Stopped) return;
 
     const config = this.configManager.getCoreConfig();
+    this.abortController = new AbortController();
     this.address = config.udp_address;
     this.port = config.udp_port; // Default to 5707.
-    this.abortController = new AbortController();
 
     this.retryScheduler = new RetryScheduler(() => this.attemptBind(), {
       intervalMs: config.retry_interval,
@@ -73,7 +72,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     this.setState(ServerState.Starting);
 
     this.logger.info(
-      `Initializing UDP listener "${this.listenerName}" on ${this.address}:${this.port}`
+      `Initializing UDP listener "${this.listenerName}" on ${this.address}:${this.port}`,
     );
 
     try {
@@ -119,78 +118,54 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
       try {
         this.socket = dgram.createSocket("udp4");
 
-        const cleanup = () => {
-          this.socket?.off(NetworkEvent.Listening, onListening);
-          this.socket?.off(NetworkEvent.Error, onError);
-          this.socket?.off(NetworkEvent.Close, onClose);
-          this.socket?.off(NetworkEvent.Message, onMessage);
+        // 1. Define cleanup for the "start-up" phase listeners
+        const removeStartupListeners = () => {
+          this.socket?.off(NetworkEvent.Listening, onStartupListening);
+          this.socket?.off(NetworkEvent.Error, onStartupError);
+          this.socket?.off(NetworkEvent.Close, onStartupClose);
         };
 
-        const onListening = () => {
-          cleanup();
-
-          // Update port if ephemeral (listen port is 0).
-          const addr = this.socket!.address();
-          if (typeof addr === "object") {
-            this.port = addr.port;
-          }
-
-          this.setState(ServerState.Listening);
-          this.retryScheduler.reset();
-          this.logger.info(
-            `UDP server listening on ${this.address}:${this.port}`
-          );
-          this.emit(NetworkEvent.Listening);
+        // 2. Define the bridge handlers that link Class Logic to this specific Promise
+        const onStartupListening = () => {
+          removeStartupListeners();
+          this.handleBindSuccess();
           resolve();
         };
 
-        const onError = (err: NodeJS.ErrnoException) => {
-          cleanup();
+        const onStartupError = (err: NodeJS.ErrnoException) => {
+          removeStartupListeners();
+          // We don't close the socket here because handleBindError might decide
+          // to keep it or the retry logic handles it, but usually we close on error.
           this.socket?.close();
 
-          if (RETRYABLE_ERRORS.has(err.code ?? "")) {
+          try {
+            this.handleBindError(err);
             reject(err);
-          } else {
-            this.setState(ServerState.Error);
-            this.emit(NetworkEvent.Error, {
-              error: err,
-              peer: undefined as any,
-            });
-            reject(err);
+          } catch (e) {
+            reject(e); // Catch if handleBindError throws
           }
         };
 
-        const onClose = () => {
-          cleanup();
+        const onStartupClose = () => {
+          removeStartupListeners();
           if (this.state !== ServerState.Stopped) {
-            this.logger.warn("UDP socket closed unexpectedly, retrying ...");
+            this.logger.warn(
+              "UDP socket closed unexpectedly during bind attempt, retrying ...",
+            );
             reject(new Error("UDP socket closed unexpectedly."));
           }
         };
 
-        const onMessage = (msg: Buffer, rinfo: RemoteInfo) => {
-          const peer: NetworkPeer = {
-            protocol: NetworkProtocol.UDP,
-            socket: this.socket!,
-            address: rinfo.address,
-            port: rinfo.port,
-          };
+        // 3. Attach Listeners
+        // Startup listeners (One-time use for the Promise)
+        this.socket.once(NetworkEvent.Listening, onStartupListening);
+        this.socket.once(NetworkEvent.Error, onStartupError);
+        this.socket.once(NetworkEvent.Close, onStartupClose);
 
-          // Update bytes received metric for OpenTelemetry.
-          bytesCounter.add(msg.length, {
-            protocol: NetworkProtocol.UDP,
-            "peer.address": peer.address,
-            "peer.port": peer.port,
-          });
+        // Runtime listener (Permanent)
+        this.socket.on(NetworkEvent.Message, this.handleMessage);
 
-          this.emit(NetworkEvent.Message, { peer, data: msg });
-        };
-
-        this.socket.once(NetworkEvent.Listening, onListening);
-        this.socket.once(NetworkEvent.Error, onError);
-        this.socket.once(NetworkEvent.Close, onClose);
-        this.socket.on(NetworkEvent.Message, onMessage);
-
+        // 4. Bind
         this.socket.bind(this.port, this.address);
       } catch (err) {
         this.setState(ServerState.Error);
@@ -198,6 +173,70 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
       }
     });
   }
+
+  // --------------------------------------------------------------------------
+  // Private Handler Methods
+  // --------------------------------------------------------------------------
+
+  /**
+   * Handles binding errors: classifies error and updates state.
+   */
+  private handleBindError = (err: NodeJS.ErrnoException): void => {
+    // If it's a retryable error (like EADDRINUSE), we usually just reject
+    // and let the retryScheduler handle it, without setting global Error state yet.
+    if (NetworkRetryable.has(err.code ?? "")) {
+      return;
+    }
+
+    // Critical error
+    this.setState(ServerState.Error);
+    this.emit(NetworkEvent.Error, {
+      error: err,
+      peer: undefined, // No peer associated with a bind error
+    });
+  };
+
+  /**
+   * Handles successful binding logic: updates state, logs, and resets retry.
+   */
+  private handleBindSuccess = (): void => {
+    // Update port if ephemeral (listen port is 0).
+    const addr = this.socket?.address();
+    if (addr && typeof addr === "object") {
+      this.port = addr.port;
+    }
+
+    this.setState(ServerState.Listening);
+    this.retryScheduler.reset();
+
+    this.logger.info(`UDP server listening on ${this.address}:${this.port}`);
+    this.emit(NetworkEvent.Listening);
+  };
+
+  /**
+   * Handles incoming messages (Runtime logic).
+   * Note: This is attached via .on(), so it persists after the Promise resolves.
+   */
+  private handleMessage = (msg: Buffer, rinfo: RemoteInfo): void => {
+    if (!this.socket) return;
+
+    const peer: NetworkPeer = {
+      protocol: NetworkProtocol.UDP,
+      socket: this.socket,
+      address: rinfo.address,
+      port: rinfo.port,
+    };
+
+    // Update bytes received metric for OpenTelemetry.
+    // Assuming 'bytesCounter' is available in scope or via 'this.metrics...'
+    bytesCounter.add(msg.length, {
+      protocol: NetworkProtocol.UDP,
+      "peer.address": peer.address,
+      "peer.port": peer.port,
+    });
+
+    this.emit(NetworkEvent.Message, { peer, data: msg });
+  };
 
   private setState(state: ServerState) {
     if (this.state !== state) {

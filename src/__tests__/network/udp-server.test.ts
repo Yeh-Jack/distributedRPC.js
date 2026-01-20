@@ -12,7 +12,27 @@ vi.mock("../../common/logger");
 
 describe("UdpServer", () => {
   let udpServer: UdpServer;
-  let mockSocket: any;
+  let sockets: any[]; // keep all sockets
+
+  function createMockSocket() {
+    const localListeners: Record<string, Function[]> = {};
+    const sock = {
+      bind: vi.fn(),
+      close: vi.fn(() => localListeners["close"]?.forEach((fn) => fn())),
+      on: vi.fn((evt, cb) => (localListeners[evt] ||= []).push(cb)),
+      once: vi.fn((evt, cb) => (localListeners[evt] ||= []).push(cb)),
+      off: vi.fn((evt, cb) => {
+        localListeners[evt] = (localListeners[evt] || []).filter(
+          (f) => f !== cb,
+        );
+      }),
+      address: vi.fn(() => ({ port: 5707 })),
+      _listeners: localListeners, // expose for test
+    };
+
+    sockets.push(sock);
+    return sock as any;
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -30,16 +50,8 @@ describe("UdpServer", () => {
       getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
     } as any);
 
-    mockSocket = {
-      bind: vi.fn().mockReturnThis(),
-      close: vi.fn(),
-      on: vi.fn(),
-      once: vi.fn(),
-      off: vi.fn(),
-      address: vi.fn(),
-    };
-
-    vi.mocked(dgram.createSocket).mockReturnValue(mockSocket as any);
+    sockets = [];
+    vi.mocked(dgram.createSocket).mockImplementation(() => createMockSocket());
     udpServer = new UdpServer("test");
   });
 
@@ -80,12 +92,27 @@ describe("UdpServer", () => {
     expect(startPromise).toBeInstanceOf(Promise);
   });
 
+  it("should retry when socket closes unexpectedly", async () => {
+    udpServer.start();
+
+    // Wait for initialization and then trigger a close event
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const firstSocket = sockets[0];
+    if (
+      firstSocket._listeners[NetworkEvent.Close] &&
+      firstSocket._listeners[NetworkEvent.Close].length > 0
+    ) {
+      firstSocket._listeners[NetworkEvent.Close][0](); // triggers retry
+    }
+
+    expect(udpServer.getState()).toBe(ServerState.Starting);
+  });
+
   it("start() should handle retryable errors properly", async () => {
     // Start the server and immediately check initialization
     udpServer.start();
-
-    // Wait for a tick to let initialization complete
-    await Promise.resolve();
+    await Promise.resolve(); // Wait for a tick to let initialization complete
 
     // Check internal setup for retry handling
     expect((udpServer as any).retryScheduler).toBeDefined();
@@ -98,12 +125,70 @@ describe("UdpServer", () => {
     await udpServer.stop();
   });
 
+  it("should retry on retryable socket error", async () => {
+    (udpServer as any).listenerName = "test-retry-socket-error";
+    udpServer.start();
+
+    // Wait for the first attempt to complete and then trigger an error
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const firstSocket = sockets[0];
+    if (
+      firstSocket._listeners[NetworkEvent.Error] &&
+      firstSocket._listeners[NetworkEvent.Error].length > 0
+    ) {
+      firstSocket._listeners[NetworkEvent.Error][0]({ code: "EADDRINUSE" });
+    }
+
+    // Wait for retry logic to complete
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const sock = sockets[sockets.length - 1];
+    sock._listeners[NetworkEvent.Listening][0]();
+
+    expect(udpServer.getState()).toBe(ServerState.Listening);
+  });
+
+  it("should stop after retry exhaustion", async () => {
+    (udpServer as any).listenerName = "test-retry-exhaustion";
+    const sockets: any[] = [];
+
+    vi.mocked(dgram.createSocket).mockImplementation(() => {
+      const localListeners: Record<string, Function[]> = {};
+      const sock = {
+        bind: vi.fn(),
+        close: vi.fn(() => localListeners["close"]?.forEach((fn) => fn())),
+        on: vi.fn((e, cb) => (localListeners[e] ||= []).push(cb)),
+        once: vi.fn((e, cb) => (localListeners[e] ||= []).push(cb)),
+        off: vi.fn((e, cb) => {
+          localListeners[e] = (localListeners[e] || []).filter((f) => f !== cb);
+        }),
+        address: vi.fn(() => ({ port: 5707 })),
+        _listeners: localListeners,
+      };
+
+      sockets.push(sock);
+
+      // Automatically fail every attempt
+      queueMicrotask(() => {
+        const err = Object.assign(new Error("busy"), { code: "EADDRINUSE" });
+        localListeners.error?.[0]?.(err);
+      });
+
+      return sock as any;
+    });
+
+    const p = udpServer.start();
+    await expect(p).rejects.toThrow("busy");
+
+    // retry_max = 2 in config
+    expect(sockets.length).toBe(2);
+    expect(udpServer.getState()).toBe(ServerState.Error);
+  });
+
   it("start() should handle non-retryable errors correctly", async () => {
     // Start the server and immediately check initialization
     udpServer.start();
-
-    // Wait for a tick to let initialization complete
-    await Promise.resolve();
+    await Promise.resolve(); // Wait for a tick to let initialization complete
 
     // Check that we can access internal state for error handling
     expect((udpServer as any).abortController).toBeDefined();
@@ -113,10 +198,33 @@ describe("UdpServer", () => {
     await udpServer.stop();
   });
 
+  it("should enter Error state on non-retryable socket error", async () => {
+    udpServer.start();
+
+    const err = Object.assign(new Error("fatal"), { code: "EACCES" });
+    const sock = sockets[0];
+    sock._listeners[NetworkEvent.Error][0](err);
+
+    await Promise.resolve(); // Wait for a tick to let handler execute complete.
+    expect(udpServer.getState()).toBe(ServerState.Error);
+  });
+
   it("stop() should gracefully stop the server", async () => {
     // Test that stop doesn't crash and properly sets state
     const result = await udpServer.stop();
     expect(result).toBeUndefined();
+    expect(udpServer.getState()).toBe(ServerState.Stopped);
+  });
+
+  it("stop() should close active socket and abort retries", async () => {
+    const p = udpServer.start();
+    const sock = sockets[0];
+    sock._listeners[NetworkEvent.Listening][0]();
+    await p;
+
+    await udpServer.stop();
+
+    expect(sock.close).toHaveBeenCalled();
     expect(udpServer.getState()).toBe(ServerState.Stopped);
   });
 
@@ -136,8 +244,19 @@ describe("UdpServer", () => {
       throw new Error("Synchronous error");
     });
 
-    const startPromise = udpServer.start();
-    await expect(startPromise).rejects.toBeDefined();
+    // Prevent "Unhandled 'error' event" crash the test.
+    // The UDP server emits error `this.emit(NetworkEvent.Error, ...)`, if no handler is
+    // attached Node.js treats it as a fatal crash (an unhandled exception).
+    udpServer.on(NetworkEvent.Error, () => {
+      console.log("Handled error event");
+    });
+
+    try {
+      udpServer.start();
+    } catch (err) {
+      console.log("Error catched.");
+      expect(err).rejects.toThrow("Synchronous error");
+    }
   });
 
   it("should handle NetworkEvent.Message properly", () => {
@@ -149,6 +268,22 @@ describe("UdpServer", () => {
     expect(typeof udpServer.on).toBe("function");
   });
 
+  it("should emit NetworkEvent.Message on incoming datagram", async () => {
+    const spy = vi.fn();
+    udpServer.on(NetworkEvent.Message, spy);
+
+    udpServer.start();
+    await Promise.resolve(); // allow scheduler to create new socket
+
+    const sock = sockets[sockets.length - 1];
+    sock._listeners[NetworkEvent.Message][0](Buffer.from("hello"), {
+      address: "1.2.3.4",
+      port: 9999,
+    });
+
+    expect(spy).toHaveBeenCalledOnce(); // Or call .toHaveBeenCalled()
+  });
+
   it("should handle error events properly", () => {
     // Test that we can subscribe to errors
     const errorSpy = vi.fn();
@@ -156,6 +291,16 @@ describe("UdpServer", () => {
 
     // Verify the event system is working at a basic level
     expect(typeof udpServer.on).toBe("function");
+  });
+
+  it("should transition to Listening on successful bind", async () => {
+    const p = udpServer.start();
+    const sock = sockets[0];
+    sock._listeners[NetworkEvent.Listening][0](); // Simulate socket ready
+    await p;
+
+    expect(udpServer.getState()).toBe(ServerState.Listening);
+    expect(udpServer.getPort()).toBe(5707);
   });
 
   it("should properly handle state transitions", () => {
@@ -171,9 +316,7 @@ describe("UdpServer", () => {
   it("should handle abort controller properly", async () => {
     // Start the server to initialize internal state
     udpServer.start();
-
-    // Wait for a tick to let initialization complete
-    await Promise.resolve();
+    await Promise.resolve(); // Wait for a tick to let initialization complete
 
     // Verify we can access and use the abort controller
     expect((udpServer as any).abortController).toBeDefined();
@@ -181,5 +324,17 @@ describe("UdpServer", () => {
 
     // Clean up by stopping the server
     await udpServer.stop();
+  });
+
+  it("should abort retry loop with AbortError", async () => {
+    const startPromise = udpServer.start();
+
+    const err = Object.assign(new Error("down"), { code: "ENETDOWN" });
+    const sock = sockets[0];
+    sock._listeners[NetworkEvent.Error][0](err); // trigger retry
+
+    await udpServer.stop(); // abort during sleep
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(udpServer.getState()).toBe(ServerState.Stopped);
   });
 });

@@ -16,9 +16,8 @@ import {
   NetworkEventMap,
   NetworkPeer,
   NetworkProtocol,
+  NetworkRetryable,
 } from "./network-events";
-
-const RETRYABLE_ERRORS = new Set(["EADDRINUSE", "EADDRNOTAVAIL", "ENETDOWN"]);
 
 export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   private configManager: ConfigManager = ConfigManager.getInstance();
@@ -42,7 +41,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
       this.logger.error(
         `[${this.listenerName}] Internal Error: ${
           err.error?.message || err.error
-        }`
+        }`,
       );
     });
   }
@@ -87,7 +86,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     this.setState(ServerState.Starting);
 
     this.logger.info(
-      `Initializing TCP listener "${this.listenerName}" on ${this.address}:${this.port}`
+      `Initializing TCP listener "${this.listenerName}" on ${this.address}:${this.port}`,
     );
 
     try {
@@ -131,7 +130,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     // Without this, server.close() waits for clients to disconnect manually
     if (this.sockets.size > 0) {
       this.logger.info(
-        `Destroying ${this.sockets.size} active connections ...`
+        `Destroying ${this.sockets.size} active connections ...`,
       );
       for (const socket of this.sockets) {
         if (!socket.destroyed) {
@@ -176,7 +175,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
           this.setState(ServerState.Listening);
           this.retryScheduler.reset(); // reset attempts after success
           this.logger.info(
-            `TCP server listening on ${this.address}:${this.port}`
+            `TCP server listening on ${this.address}:${this.port}`,
           );
           this.emit(NetworkEvent.Listening);
           resolve();
@@ -186,7 +185,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
           cleanup();
           this.server?.close();
 
-          if (RETRYABLE_ERRORS.has(err.code ?? "")) {
+          if (NetworkRetryable.has(err.code ?? "")) {
             reject(err); // Reject triggers retry loop, the RetryScheduler.run() will retry.
           } else {
             this.setState(ServerState.Error);

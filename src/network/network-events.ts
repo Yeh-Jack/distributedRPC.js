@@ -1,6 +1,12 @@
 import { Socket as TcpSocket } from "net";
 import { Socket as UdpSocket } from "dgram";
 
+export const NetworkRetryable = new Set([
+  "EADDRINUSE",
+  "EADDRNOTAVAIL",
+  "ENETDOWN",
+]);
+
 export enum NetworkProtocol {
   TCP = "TCP",
   UDP = "UDP",

@@ -143,7 +143,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     this.setState(ServerState.Starting);
 
     this.logger.debug(
-      `Initializing ${this.getNameArrow()} UDP listener on ${this.address}:${this.port}`,
+      `Initializing ${this.getArrowedName()} UDP listener on ${this.address}:${this.port}`,
     );
 
     try {
@@ -154,7 +154,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
         // Cancellation is not a failure.
         this.setState(ServerState.Stopped);
         this.logger.warn(
-          `The ${this.getNameArrow()} UDP server start aborted.`,
+          `The ${this.getArrowedName()} UDP server start aborted.`,
         );
         return;
       }
@@ -171,7 +171,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   public async stop(): Promise<void> {
     if (this.state === ServerState.Stopped) return;
 
-    this.logger.info(`Stopping the ${this.getNameArrow()} UDP server...`);
+    this.logger.info(`Stopping the ${this.getArrowedName()} UDP server...`);
     this.setState(ServerState.Stopped);
 
     this.abortController.abort();
@@ -228,11 +228,11 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
           removeStartupListeners();
           if (this.state !== ServerState.Stopped) {
             this.logger.warn(
-              `The ${this.getNameArrow()} UDP socket closed unexpectedly during bind attempt, retrying ...`,
+              `The ${this.getArrowedName()} UDP socket closed unexpectedly during bind attempt, retrying ...`,
             );
             reject(
               new Error(
-                `The ${this.getNameArrow()} UDP socket closed unexpectedly.`,
+                `The ${this.getArrowedName()} UDP socket closed unexpectedly.`,
               ),
             );
           }
@@ -294,7 +294,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     this.retryScheduler.reset();
 
     this.logger.info(
-      `The ${this.getNameArrow()} UDP server listening on ${this.address}:${this.port}`,
+      `The ${this.getArrowedName()} UDP server listening on ${this.address}:${this.port}`,
     );
     this.emit(NetworkEvent.Listening);
   };
@@ -330,14 +330,14 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
    * Returns the name with "<>" of this listener.
    * Primary for logging and metric tagging.
    */
-  private getNameArrow(): string {
+  private getArrowedName(): string {
     return `<${this.name}>`;
   }
 
   private setState(state: ServerState): void {
     if (this.state !== state) {
       this.logger.info(
-        `${this.getNameArrow()} ${this.port}/UDP state: ${this.state} → ${state}`,
+        `${this.getArrowedName()} ${this.port}/UDP state: ${this.state} → ${state}`,
       );
       this.state = state;
     }

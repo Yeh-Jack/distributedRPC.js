@@ -130,10 +130,10 @@ export class ServiceManager {
    */
   public async start(): Promise<void> {
     if (!this.initialized) {
-      this.logger.debug(`Initializing <${this.getIdentity()}> ...`);
+      this.logger.debug(`Initializing ${this.getArrowedIdentity()} ...`);
       this.initialize();
       this.initialized = true;
-      this.logger.debug(`<${this.getIdentity()}> initialized.`);
+      this.logger.debug(`${this.getArrowedIdentity()} initialized.`);
     }
     this.setState(ServerState.Starting);
 
@@ -143,7 +143,7 @@ export class ServiceManager {
       this.initializeUdpListener("reception"),
     ]);
 
-    this.logger.info(`<${this.getIdentity()}> started successfully.`);
+    this.logger.info(`${this.getArrowedIdentity()} started successfully.`);
     this.setState(ServerState.Running);
   }
 
@@ -155,31 +155,42 @@ export class ServiceManager {
   public async stop(): Promise<void> {
     this.logger.info("Stopping all services ...");
     this.setState(ServerState.Stopping);
-    const wait = [];
+    const wait: Promise<void>[] = [];
 
-    // Stop all services in parallel.
     for (const [name, service] of this.services.entries()) {
-      try {
-        if (typeof service.stop === "function") {
-          wait.push(service.stop()); // Stop the TCP server.
-          this.logger.info(`Service "${name}" stopped successfully.`);
-        }
-      } catch (error) {
-        this.logger.error(
-          `Failed to stop service "${name}": ${
-            error instanceof Error ? error.message : "Unknown error"
-          }`,
-        );
+      if (typeof service.stop === "function") {
+        const stopPromise = service
+          .stop()
+          .then(() => {
+            this.logger.info(`Service <${name}> stopped successfully.`);
+          })
+          .catch((error: Error) => {
+            this.logger.error(
+              `Failed to stop service <${name}>: ${
+                error instanceof Error ? error.message : "Unknown error"
+              }`,
+            );
+          });
+        wait.push(stopPromise);
       }
     }
 
     await Promise.all(wait);
-    this.logger.info(`<${this.getIdentity()}> stopped.`);
+    this.logger.info(`${this.getArrowedIdentity()} stopped.`);
     this.setState(ServerState.Stopped);
   }
 
   /**
-   * Generates a unique identity string for the service instance.
+   * Get the unique identity string of the service instance with "<>".
+   *
+   * @returns The unique identity string.
+   */
+  protected getArrowedIdentity(): string {
+    return `<${this.getIdentity()}>`;
+  }
+
+  /**
+   * Get the unique identity string of the service instance.
    *
    * @returns The unique identity string.
    */
@@ -287,7 +298,7 @@ export class ServiceManager {
       ServerStateMetric.setState(state);
 
       this.logger.info(
-        `<${this.getIdentity()}> state: ${this.state} → ${state}.`,
+        `${this.getArrowedIdentity()} state: ${this.state} → ${state}.`,
       );
       this.state = state;
     }

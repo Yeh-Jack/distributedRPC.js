@@ -78,7 +78,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     // Prevent process crash if 'error' is emitted and no one is listening
     this.on(ServerState.Error, (err) => {
       this.logger.error(
-        `${this.getNameArrow()} Internal TCP Error: ${err.error?.message || err.error}`,
+        `${this.getArrowedName()} Internal TCP Error: ${err.error?.message || err.error}`,
       );
     });
   }
@@ -149,7 +149,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     this.setState(ServerState.Starting);
 
     this.logger.debug(
-      `Initializing ${this.getNameArrow()} TCP listener on ${this.address}:${this.port}`,
+      `Initializing ${this.getArrowedName()} TCP listener on ${this.address}:${this.port}`,
     );
 
     try {
@@ -160,7 +160,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
         // Cancellation is not a failure.
         this.setState(ServerState.Stopped);
         this.logger.warn(
-          `The ${this.getNameArrow()} TCP server start aborted.`,
+          `The ${this.getArrowedName()} TCP server start aborted.`,
         );
         return;
       }
@@ -177,7 +177,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   public async stop(): Promise<void> {
     if (this.state === ServerState.Stopped) return;
 
-    this.logger.info(`Stopping the ${this.getNameArrow()} TCP server ...`);
+    this.logger.info(`Stopping the ${this.getArrowedName()} TCP server ...`);
     this.setState(ServerState.Stopped);
 
     this.abortController.abort();
@@ -191,7 +191,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
           // It's common for close() to error if the server was not open
           // We log it but resolve anyway to ensure shutdown continues.
           this.logger.warn(
-            `${this.getNameArrow()} TCP server close error (ignoring)`,
+            `${this.getArrowedName()} TCP server close error (ignoring)`,
             { error: err },
           );
         }
@@ -214,7 +214,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     }
 
     await closeServerPromise;
-    this.logger.info(`The ${this.getNameArrow()} TCP Server stopped.`);
+    this.logger.info(`The ${this.getArrowedName()} TCP Server stopped.`);
   }
 
   // -------------------------------
@@ -248,7 +248,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
           this.setState(ServerState.Listening);
           this.retryScheduler.reset(); // reset attempts after success
           this.logger.info(
-            `The ${this.getNameArrow()} TCP server listening on ${this.address}:${this.port}`,
+            `The ${this.getArrowedName()} TCP server listening on ${this.address}:${this.port}`,
           );
           this.emit(NetworkEvent.Listening);
           resolve();
@@ -274,11 +274,11 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
           cleanup();
           if (this.state !== ServerState.Stopped) {
             this.logger.warn(
-              `The ${this.getNameArrow()} TCP server closed unexpectedly, retrying ...`,
+              `The ${this.getArrowedName()} TCP server closed unexpectedly, retrying ...`,
             );
             reject(
               new Error(
-                `The ${this.getNameArrow()} TCP server closed unexpectedly.`,
+                `The ${this.getArrowedName()} TCP server closed unexpectedly.`,
               ),
             );
           }
@@ -342,14 +342,14 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
    * Returns the name with "<>" of this listener.
    * Primary for logging and metric tagging.
    */
-  private getNameArrow(): string {
+  private getArrowedName(): string {
     return `<${this.name}>`;
   }
 
   private setState(state: ServerState): void {
     if (this.state !== state) {
       this.logger.info(
-        `${this.getNameArrow()} ${this.port}/TCP state: ${this.state} → ${state}`,
+        `${this.getArrowedName()} ${this.port}/TCP state: ${this.state} → ${state}`,
       );
       this.state = state;
     }

@@ -1,4 +1,5 @@
 // Setup file for Vitest tests
+import "reflect-metadata";
 import { vi } from 'vitest';
 
 // Mock global objects if needed

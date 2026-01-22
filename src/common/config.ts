@@ -1,8 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import yaml from "js-yaml";
+import { inject, injectable } from "inversify";
 import { LogFormat } from "./logger";
-import { UNKNOWN_SERVICE_NAME } from "../types/basal-protocol";
+import { AppEnv, getAppEnv, UNKNOWN_ATTRIBUTE } from "../types/basal-protocol";
 
 /**
  * Represents the configuration options for the application.
@@ -59,7 +60,7 @@ export interface LogConfig {
  */
 export interface ProviderConfig<
   T_App extends AppConfig = AppConfig,
-  T_Core extends CoreConfig = CoreConfig
+  T_Core extends CoreConfig = CoreConfig,
 > {
   app: T_App;
   core: T_Core;
@@ -68,7 +69,7 @@ export interface ProviderConfig<
 
 /**
  * Manages application, core and logging configuration settings, supporting loading from YAML files,
- * providing default values, and singleton access. This generic class is intended to be
+ * providing default values, and dependency injection. This generic class is intended to be
  * extended for specific application and core configuration types.
  *
  * @typeParam T_App - The type representing the application-specific configuration.
@@ -77,35 +78,30 @@ export interface ProviderConfig<
  * @remarks
  * - Loads configuration from `config.yml` in the working directory or `config/config.yml`.
  * - Falls back to default values if the configuration file is missing or invalid.
- * - Implements a singleton pattern; subclasses should override `getInstance` for type safety.
+ * - Supports dependency injection via InversifyJS; subclasses should override for type safety.
  *
  * @example
  * ```typescript
+ * @injectable()
  * class MyConfigManager extends ConfigManager<MyAppConfig, MyCoreConfig> {
  *   // Custom implementation...
  * }
- * const config = MyConfigManager.getInstance("my-service");
  * ```
  */
+@injectable()
 export class ConfigManager<
   T_App extends AppConfig = AppConfig,
-  T_Core extends CoreConfig = CoreConfig
+  T_Core extends CoreConfig = CoreConfig,
 > {
   protected config: ProviderConfig<T_App, T_Core>;
-  private static instance: ConfigManager<any, any>;
-  private svcName: string;
 
   /**
-   * Protected constructor for initializing the configuration with a specific service name.
-   *
-   * @param svcName - The name of the service. This value is assigned once and cannot be changed.
+   * Public constructor for initializing and load the configuration.
    *
    * @remarks
-   * The constructor also loads the configuration for the service upon instantiation.
-   * Intended to be used by subclasses.
+   * Supports dependency injection via InversifyJS.
    */
-  protected constructor(svcName: string) {
-    this.svcName = svcName; // Assigned once and then "locked".
+  public constructor() {
     this.config = this.loadConfig();
   }
 
@@ -134,22 +130,6 @@ export class ConfigManager<
    */
   public getConfig(): ProviderConfig<T_App, T_Core> {
     return this.config;
-  }
-
-  /**
-   * Returns the singleton instance of the `ConfigManager` class.
-   * If the instance does not exist, it creates a new one with the provided service name.
-   *
-   * @param svcName - The name of the service to associate with the configuration manager. Defaults to `UNKNOWN_SERVICE_NAME`.
-   * @returns The singleton instance of `ConfigManager`.
-   */
-  public static getInstance(
-    svcName: string = UNKNOWN_SERVICE_NAME
-  ): ConfigManager {
-    if (!ConfigManager.instance) {
-      ConfigManager.instance = new ConfigManager(svcName);
-    }
-    return ConfigManager.instance;
   }
 
   /**
@@ -220,7 +200,7 @@ export class ConfigManager<
     return {
       retry_interval: 5000,
       retry_max: 0,
-      service_name: this.svcName,
+      service_name: UNKNOWN_ATTRIBUTE,
       tcp_address: NIC_ADDRESS,
       tcp_port: 0,
       udp_address: NIC_ADDRESS,
@@ -230,9 +210,7 @@ export class ConfigManager<
 
   private getDefaultLogConfig(): LogConfig {
     const logFormat =
-      process.env.NODE_ENV === "production"
-        ? LogFormat.JSON
-        : LogFormat.CONSOLE;
+      AppEnv.production === getAppEnv() ? LogFormat.JSON : LogFormat.CONSOLE;
     return {
       format: logFormat,
       log_level: "info",
@@ -251,7 +229,7 @@ export class ConfigManager<
    * @returns A complete provider configuration object with defaults applied where necessary.
    */
   private mergeWithDefaults(
-    parsed: Partial<ProviderConfig<T_App, T_Core>>
+    parsed: Partial<ProviderConfig<T_App, T_Core>>,
   ): ProviderConfig<T_App, T_Core> {
     const defaults = this.getDefaultConfig();
     return {

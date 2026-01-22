@@ -23,38 +23,39 @@ describe("ConfigManager", () => {
   const defaultSvcName = "test-service";
 
   beforeEach(() => {
-    vi.clearAllMocks(); // Clear any existing console spies.
-    (ConfigManager as any).instance = undefined; // Clear singleton instance for clean tests.
+    vi.clearAllMocks();
   });
 
-  it("should create singleton instance", () => {
-    const instance1 = ConfigManager.getInstance("test1");
-    const instance2 = ConfigManager.getInstance("test2");
+  it("should create instance with provided service name", () => {
+    const configManager1 = new ConfigManager();
+    const configManager2 = new ConfigManager();
 
-    expect(instance1).toBe(instance2);
+    configManager1.getCoreConfig().service_name = "test1";
+    configManager2.getCoreConfig().service_name = "test2";
+
+    expect(configManager1).not.toBe(configManager2);
+    expect(configManager1.getCoreConfig().service_name).toBe("test1");
+    expect(configManager2.getCoreConfig().service_name).toBe("test2");
   });
 
   it("should load default configuration", () => {
-    vi.spyOn(fs, "existsSync").mockReturnValue(false); // Emulate no config file.
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
 
-    const configManager = ConfigManager.getInstance(defaultSvcName);
+    const configManager = new ConfigManager();
+    configManager.getCoreConfig().service_name = defaultSvcName;
     validateDefaultConfig(configManager, defaultSvcName);
   });
 
   it("should trigger catch block when file reading fails (e.g., EACCES)", () => {
-    // 1. Pretend the file exists so it passes the early checks
     vi.mocked(fs.existsSync).mockReturnValue(true);
-
-    // 2. Force readFileSync to throw a System Error
     vi.mocked(fs.readFileSync).mockImplementation(() => {
       throw new Error("EACCES: permission denied");
     });
 
-    // 3. Spy on console.error to verify the catch block logic
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    // Returns default config due to the error.
-    const configManager = ConfigManager.getInstance(defaultSvcName);
+    const configManager = new ConfigManager();
+    configManager.getCoreConfig().service_name = defaultSvcName;
     expect(errorSpy).toHaveBeenCalled();
     validateDefaultConfig(configManager, defaultSvcName);
   });
@@ -63,20 +64,19 @@ describe("ConfigManager", () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue("invalid: yaml: : logic");
 
-    // Create the spy and mock the 'load' implementation.
     const spy = vi.spyOn(yaml, "load").mockImplementation(() => {
       throw new Error("YAMLException: bad indentation");
     });
 
-    const configManager = ConfigManager.getInstance(defaultSvcName);
+    const configManager = new ConfigManager();
+    configManager.getCoreConfig().service_name = defaultSvcName;
     validateDefaultConfig(configManager, defaultSvcName);
     spy.mockRestore();
   });
 
   it("should update configuration values when reload is called", () => {
-    const configManager = ConfigManager.getInstance(defaultSvcName);
+    const configManager = new ConfigManager();
 
-    // Mock file system to simulate config change
     const svcName = "mocked-svc";
     const address = "localhost";
     const port = 8080;
@@ -87,8 +87,8 @@ core:
   udp_port: ${port}
 `;
 
-    vi.spyOn(fs, "existsSync").mockReturnValue(true); // Assuming your load logic checks if file exists
-    vi.spyOn(fs, "readFileSync").mockReturnValueOnce(updatedYaml); // Called during reload()
+    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    vi.spyOn(fs, "readFileSync").mockReturnValueOnce(updatedYaml);
 
     configManager.reload();
 
@@ -97,7 +97,6 @@ core:
     expect(coreConfig.udp_address).toBe(address);
     expect(coreConfig.udp_port).toBe(port);
 
-    // Restore original
     vi.restoreAllMocks();
   });
 });

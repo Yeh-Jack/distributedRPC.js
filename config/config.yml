@@ -13,8 +13,8 @@ app:
 #   udp_address: 0.0.0.0
 #   udp_port: 5707
 
-# log:
+log:
+  log_level: debug
 #   format: json
-#   log_level: info
 #   max_files: 14d
 #   max_size: 20m

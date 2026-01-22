@@ -1,16 +1,19 @@
+/**
+ * TCP server implementation for distributed RPC communication.
+ * @module tcp-server
+ */
+
 import { createServer, Server, Socket as TcpSocket } from "net";
+import { inject, injectable } from "inversify";
 
 import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
 import { ServerState } from "../types/basal-protocol";
+import { TYPES } from "../aop/di-types";
 import { TypedEventEmitter } from "./typed-event-emitter";
-import {
-  activeConnections,
-  bytesCounter,
-  listenerState,
-} from "../metrics/otel-metrics";
+import { activeConnections, bytesCounter } from "../metrics/otel-metrics";
 import {
   NetworkEvent,
   NetworkEventMap,
@@ -19,10 +22,31 @@ import {
   NetworkRetryable,
 } from "./network-events";
 
+/**
+ * TCP server for handling incoming client connections.
+ *
+ * Features:
+ * - Automatic retry with configurable backoff on bind failures
+ * - Connection tracking and metrics
+ * - Graceful shutdown with socket cleanup
+ * - Event-driven architecture using TypedEventEmitter
+ *
+ * @example
+ * ```typescript
+ * // Using IoC container
+ * const tcpServer = container.get<TcpServer>(TYPES.TcpServer);
+ * tcpServer.on(NetworkEvent.Listening, () => {
+ *   console.log("Server listening on port", tcpServer.getPort());
+ * });
+ * await tcpServer.start();
+ * ```
+ */
+@injectable()
 export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
-  private configManager: ConfigManager = ConfigManager.getInstance();
-  private logger: ReturnType<typeof LoggerManager.prototype.getLogger> =
-    LoggerManager.getInstance().getLogger();
+  public readonly name: string;
+
+  private configManager: ConfigManager;
+  private logger: ReturnType<LoggerManager["getLogger"]>;
 
   private abortController!: AbortController;
   private retryScheduler!: RetryScheduler;
@@ -32,16 +56,29 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   private address!: string;
   private port!: number;
 
-  private sockets: Set<TcpSocket> = new Set(); // For tracking active sockets.
+  private sockets: Set<TcpSocket> = new Set();
 
-  constructor(private readonly listenerName: string) {
+  /**
+   * Creates a new TCP server instance.
+   *
+   * @param configManager - The configuration manager for retrieving service settings.
+   * @param loggerManager - The logger manager for obtaining the application logger.
+   * @param name - Optional name to identify this server instance.
+   */
+  constructor(
+    @inject(TYPES.ConfigManager) configManager: ConfigManager,
+    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
+    name: string = "tcp-server",
+  ) {
     super();
+    this.configManager = configManager;
+    this.logger = loggerManager.getLogger();
+    this.name = name;
+
     // Prevent process crash if 'error' is emitted and no one is listening
     this.on(ServerState.Error, (err) => {
       this.logger.error(
-        `[${this.listenerName}] Internal Error: ${
-          err.error?.message || err.error
-        }`,
+        `${this.getNameArrow()} Internal TCP Error: ${err.error?.message || err.error}`,
       );
     });
   }
@@ -50,14 +87,40 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   // Public API
   // -------------------------------
 
+  /**
+   * Returns the current server state.
+   *
+   * @returns The current ServerState (Stopped, Starting, Running, Listening, etc.).
+   */
   public getState(): ServerState {
     return this.state;
   }
 
+  /**
+   * Returns the port the server is listening on.
+   *
+   * @returns The port number (dynamically assigned if configured port is 0).
+   */
   public getPort(): number {
-    return this.port; // dynamically assigned if configured port = 0
+    return this.port;
   }
 
+  /**
+   * Starts the TCP server and begins accepting connections.
+   * Uses RetryScheduler for automatic retry on bind failures.
+   *
+   * @returns Promise that resolves when server is listening.
+   * @throws Error if server fails to start after max retries.
+   * @example
+   * ```typescript
+   * try {
+   *   await tcpServer.start();
+   *   console.log("Server started on port", tcpServer.getPort());
+   * } catch (err) {
+   *   console.error("Failed to start server:", err);
+   * }
+   * ```
+   */
   public async start(): Promise<void> {
     if (this.state !== ServerState.Stopped) return;
 
@@ -85,8 +148,8 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
 
     this.setState(ServerState.Starting);
 
-    this.logger.info(
-      `Initializing TCP listener "${this.listenerName}" on ${this.address}:${this.port}`,
+    this.logger.debug(
+      `Initializing ${this.getNameArrow()} TCP listener on ${this.address}:${this.port}`,
     );
 
     try {
@@ -96,7 +159,9 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
       if (isAbortError(err)) {
         // Cancellation is not a failure.
         this.setState(ServerState.Stopped);
-        this.logger.info("TCP server start aborted.");
+        this.logger.warn(
+          `The ${this.getNameArrow()} TCP server start aborted.`,
+        );
         return;
       }
       this.setState(ServerState.Error);
@@ -104,10 +169,15 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     }
   }
 
+  /**
+   * Stops the TCP server and closes all active connections.
+   *
+   * @returns Promise that resolves when the server has stopped.
+   */
   public async stop(): Promise<void> {
     if (this.state === ServerState.Stopped) return;
 
-    this.logger.info("Stopping TCP server...");
+    this.logger.info(`Stopping the ${this.getNameArrow()} TCP server ...`);
     this.setState(ServerState.Stopped);
 
     this.abortController.abort();
@@ -120,7 +190,10 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
         if (err) {
           // It's common for close() to error if the server was not open
           // We log it but resolve anyway to ensure shutdown continues.
-          this.logger.warn("Server close error (ignoring)", { error: err });
+          this.logger.warn(
+            `${this.getNameArrow()} TCP server close error (ignoring)`,
+            { error: err },
+          );
         }
         resolve();
       });
@@ -141,7 +214,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     }
 
     await closeServerPromise;
-    this.logger.info("TCP Server stopped.");
+    this.logger.info(`The ${this.getNameArrow()} TCP Server stopped.`);
   }
 
   // -------------------------------
@@ -175,7 +248,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
           this.setState(ServerState.Listening);
           this.retryScheduler.reset(); // reset attempts after success
           this.logger.info(
-            `TCP server listening on ${this.address}:${this.port}`,
+            `The ${this.getNameArrow()} TCP server listening on ${this.address}:${this.port}`,
           );
           this.emit(NetworkEvent.Listening);
           resolve();
@@ -200,8 +273,14 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
         const onClose = () => {
           cleanup();
           if (this.state !== ServerState.Stopped) {
-            this.logger.warn("Server closed unexpectedly, retrying ...");
-            reject(new Error("Server closed unexpectedly."));
+            this.logger.warn(
+              `The ${this.getNameArrow()} TCP server closed unexpectedly, retrying ...`,
+            );
+            reject(
+              new Error(
+                `The ${this.getNameArrow()} TCP server closed unexpectedly.`,
+              ),
+            );
           }
         };
 
@@ -259,13 +338,19 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     });
   }
 
-  private setState(state: ServerState) {
+  /**
+   * Returns the name with "<>" of this listener.
+   * Primary for logging and metric tagging.
+   */
+  private getNameArrow(): string {
+    return `<${this.name}>`;
+  }
+
+  private setState(state: ServerState): void {
     if (this.state !== state) {
-      // Update server state metric for OpenTelemetry.
-      // ObservableGauge is an async instrument and cannot be updated directly; store the latest
-      // state on the gauge object for the observable callback to report.
-      (listenerState as any).latestState = state;
-      this.logger.info(`TCP server state: ${this.state} → ${state}`);
+      this.logger.info(
+        `${this.getNameArrow()} ${this.port}/TCP state: ${this.state} → ${state}`,
+      );
       this.state = state;
     }
   }

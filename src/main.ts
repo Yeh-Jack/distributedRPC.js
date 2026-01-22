@@ -1,61 +1,82 @@
-import "reflect-metadata";
-import { Logger } from "winston";
+/**
+ * Application entry point for the distributed RPC service.
+ * @module main
+ */
 
-import { container, TYPES } from "./aop/container";
-import { LoggerManager } from "./common/logger";
+import "reflect-metadata";
+
+import { container } from "./aop/container";
+import { TYPES } from "./aop/di-types";
 import { ServiceManager } from "./manager/service-manager";
 
-// Global variable to track shutdown
-let shutdownRequested = false;
+const INTERRUPT_KEY = "<Ctrl+C>";
 
-async function main(): Promise<void> {
-  // Setup signal handlers for graceful shutdown
-  process.on("SIGINT", () => {
-    logger.info(
-      `Received SIGINT for ${providerName}, shutting down gracefully...`
-    );
-    shutdownRequested = true;
-    process.exit(0);
-  });
-
-  process.on("SIGTERM", () => {
-    logger.info(
-      `Received SIGTERM for ${providerName}, shutting down gracefully...`
-    );
-    shutdownRequested = true;
-    process.exit(0);
-  });
-
-  // Initialize service manager with UDP server
-  const provider = container.get<ServiceManager>(TYPES.ServiceManager);
-  const logger: Logger = LoggerManager.getInstance().getLogger();
+function handleInterruption(provider: ServiceManager, logger: any) {
   const providerName = provider.getServiceName();
+
+  // Handle graceful shutdown for <Ctrl+C>.
+  process.on("SIGINT", async () => {
+    logger.info(
+      `${INTERRUPT_KEY} is detected, shutting down the ${providerName} gracefully ...`,
+    );
+    await provider.stop();
+    process.exit(0);
+  });
+
+  // Setup signal handlers for graceful shutdown.
+  ["SIGABRT", "SIGHUP", "SIGTERM"].forEach((signal) => {
+    process.on(signal as NodeJS.Signals, async () => {
+      logger.info(
+        `Received <${signal}> for ${providerName}, shutting down gracefully ...`,
+      );
+      await provider.stop();
+      process.exit(0);
+    });
+  });
+}
+
+/**
+ * Main entry point function that initializes and starts the distributed RPC service.
+ *
+ * Responsibilities:
+ * - Resolves dependencies from the IoC container
+ * - Initializes the ServiceManager
+ * - Sets up graceful shutdown signal handlers
+ * - Reports startup timing metrics
+ *
+ * @returns Promise that resolves when the service is running or rejects on critical error.
+ * @example
+ * ```bash
+ * # Run the service
+ * npm start
+ * ```
+ */
+async function main(): Promise<void> {
+  const logger = container.get<any>(TYPES.Logger);
+  const provider = container.get<ServiceManager>(TYPES.ServiceManager);
+  const providerName = provider.getServiceName();
+
+  handleInterruption(provider, logger);
   logger.info(`Starting ${providerName} application ...`);
 
   try {
     const startTime = process.hrtime.bigint();
-    await provider.initialize();
+    await provider.start();
     const elapsedNs = process.hrtime.bigint() - startTime;
     const elapsedMs = Number(elapsedNs) / 1_000_000;
     logger.info(
       `${providerName} has been started successfully in ${elapsedMs.toFixed(
-        2
-      )} ms.`
+        2,
+      )} ms.`,
     );
-    logger.info("Press Ctrl+C to stop");
+    logger.info(`Press ${INTERRUPT_KEY} to stop`);
   } catch (error) {
     console.error(`Critical error in main application: ${error}`);
     process.exit(1);
   }
-
-  // Handle graceful shutdown
-  process.on("SIGINT", () => {
-    logger.info("Shutting down...");
-    provider.stop();
-    process.exit(0);
-  });
 }
 
+// Run main function when this file is executed directly
 if (require.main === module) {
   main().catch((error) => {
     console.error("Unhandled error:", error);

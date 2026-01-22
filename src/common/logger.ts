@@ -2,8 +2,10 @@ import fs from "fs";
 import path from "path";
 import DailyRotateFile from "winston-daily-rotate-file";
 import { createLogger, format, transports, Logger } from "winston";
+import { inject, injectable } from "inversify";
 import { ConfigManager } from "./config";
-import { UNKNOWN_SERVICE_NAME } from "../types/basal-protocol";
+import { TYPES } from "../aop/di-types";
+import { UNKNOWN_ATTRIBUTE } from "../types/basal-protocol";
 
 const { combine, timestamp, printf, json, errors, colorize } = format;
 
@@ -19,25 +21,36 @@ export enum LogFormat {
  * for the application. It supports dynamic reloading of logger configuration, log file rotation,
  * and multiple log formats (console and JSON).
  *
- * - Ensures only one logger instance exists (singleton pattern).
+ * - Supports dependency injection via InversifyJS.
  * - Automatically creates a `logs` directory if it does not exist.
  * - Supports console and file transports, with daily log rotation for files.
  * - Allows dynamic reloading of logger configuration via the `reload()` method.
  *
  * @example
  * ```typescript
- * const loggerManager = LoggerManager.getInstance();
- * const logger = loggerManager.getLogger();
- * logger.info("Application started");
+ * @injectable()
+ * class MyService {
+ *   constructor(
+ *     @inject(TYPES.Logger) private logger: Logger,
+ *     private configManager: ConfigManager
+ *   ) {}
+ * }
  * ```
  */
+@injectable()
 export class LoggerManager {
-  private static instance: LoggerManager;
   private logger!: Logger;
   private configManager: ConfigManager;
 
-  private constructor() {
-    this.configManager = ConfigManager.getInstance();
+  /**
+   * Creates a LoggerManager instance with the injected ConfigManager.
+   *
+   * @param configManager - The configuration manager for retrieving log settings.
+   */
+  public constructor(
+    @inject(TYPES.ConfigManager) configManager: ConfigManager,
+  ) {
+    this.configManager = configManager;
 
     // Create logs directory if it doesn't exist
     const logDir = path.join(process.cwd(), "logs");
@@ -45,19 +58,6 @@ export class LoggerManager {
       fs.mkdirSync(logDir, { recursive: true });
     }
     this.reload();
-  }
-
-  /**
-   * Returns the singleton instance of the LoggerManager.
-   * If the instance does not exist, it creates a new one.
-   *
-   * @returns {LoggerManager} The singleton LoggerManager instance.
-   */
-  public static getInstance(): LoggerManager {
-    if (!LoggerManager.instance) {
-      LoggerManager.instance = new LoggerManager();
-    }
-    return LoggerManager.instance;
   }
 
   /**
@@ -70,7 +70,7 @@ export class LoggerManager {
   public getLogger(): Logger {
     if (!this.logger) {
       throw new Error(
-        "The Logger is not initialized yet. Call reload() first."
+        "The Logger is not initialized yet. Call reload() first.",
       );
     }
     return this.logger;
@@ -90,7 +90,7 @@ export class LoggerManager {
   public async reload(): Promise<void> {
     const jsonCombine = combine(
       timestamp(), // Use default ISO format for machine parsing
-      json()
+      json(),
     );
 
     const logConfig = this.configManager.getConfig().log;
@@ -101,9 +101,9 @@ export class LoggerManager {
         ({ timestamp, level, message, stack, svcName: metaSvc }) => {
           const logMessage = stack ? `${message}\n${stack}` : message;
           return `[${timestamp}] [${
-            metaSvc || svcName || UNKNOWN_SERVICE_NAME
+            metaSvc || svcName || UNKNOWN_ATTRIBUTE
           }] [${level}] ${logMessage}`;
-        }
+        },
       );
 
       activeTransports.push(
@@ -112,16 +112,16 @@ export class LoggerManager {
           format: combine(
             colorize({ all: true }),
             timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
-            consoleLayout
+            consoleLayout,
           ),
-        })
+        }),
       );
     } else {
       activeTransports.push(
         // CONSOLE Transport: JSON format. This might be a File transport or a specialized OTEL collector.
         new transports.Console({
           format: jsonCombine,
-        })
+        }),
       );
     }
 
@@ -136,14 +136,18 @@ export class LoggerManager {
         maxFiles: logConfig.max_files,
         maxSize: logConfig.max_size,
         format: jsonCombine, // File logs usually benefit from JSON for easier post-analysis.
-      })
+      }),
     );
 
     this.logger = createLogger({
       level: logConfig.log_level,
-      defaultMeta: { svcName: svcName || UNKNOWN_SERVICE_NAME },
+      defaultMeta: { svcName: svcName || UNKNOWN_ATTRIBUTE },
       format: errors({ stack: true }), // Ensure all formats get the stack trace
       transports: activeTransports,
     });
+  }
+
+  public close(): void {
+    this.logger.close();
   }
 }

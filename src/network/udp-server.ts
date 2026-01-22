@@ -1,12 +1,19 @@
+/**
+ * UDP server implementation for distributed RPC communication.
+ * @module udp-server
+ */
+
 import dgram, { Socket as UdpSocket, RemoteInfo } from "dgram";
+import { inject, injectable } from "inversify";
 
 import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
 import { ServerState } from "../types/basal-protocol";
+import { TYPES } from "../aop/di-types";
 import { TypedEventEmitter } from "./typed-event-emitter";
-import { bytesCounter, listenerState } from "../metrics/otel-metrics";
+import { bytesCounter } from "../metrics/otel-metrics";
 import {
   NetworkEvent,
   NetworkEventMap,
@@ -15,10 +22,34 @@ import {
   NetworkRetryable,
 } from "./network-events";
 
+/**
+ * UDP server for handling incoming datagram messages.
+ *
+ * Features:
+ * - Automatic retry with configurable backoff on bind failures
+ * - Message tracking and metrics
+ * - Graceful shutdown
+ * - Event-driven architecture using TypedEventEmitter
+ *
+ * @example
+ * ```typescript
+ * // Using IoC container
+ * const udpServer = container.get<UdpServer>(TYPES.UdpServer);
+ * udpServer.on(NetworkEvent.Listening, () => {
+ *   console.log("UDP server listening on port", udpServer.getPort());
+ * });
+ * udpServer.on(NetworkEvent.Message, ({ peer, data }) => {
+ *   console.log("Received from", peer.address, ":", data);
+ * });
+ * await udpServer.start();
+ * ```
+ */
+@injectable()
 export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
-  private configManager: ConfigManager = ConfigManager.getInstance();
-  private logger: ReturnType<typeof LoggerManager.prototype.getLogger> =
-    LoggerManager.getInstance().getLogger();
+  public readonly name: string;
+
+  private configManager: ConfigManager;
+  private logger: ReturnType<LoggerManager["getLogger"]>;
 
   private abortController!: AbortController;
   private retryScheduler!: RetryScheduler;
@@ -28,22 +59,62 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   private address!: string;
   private port!: number;
 
-  constructor(private readonly listenerName: string) {
+  /**
+   * Creates a new UDP server instance.
+   *
+   * @param configManager - The configuration manager for retrieving service settings.
+   * @param loggerManager - The logger manager for obtaining the application logger.
+   * @param name - Optional name to identify this server instance.
+   */
+  constructor(
+    @inject(TYPES.ConfigManager) configManager: ConfigManager,
+    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
+    name: string = "udp-server",
+  ) {
     super();
+    this.configManager = configManager;
+    this.logger = loggerManager.getLogger();
+    this.name = name;
   }
 
   // -------------------------------
   // Public API
   // -------------------------------
 
+  /**
+   * Returns the current server state.
+   *
+   * @returns The current ServerState (Stopped, Starting, Running, Listening, etc.).
+   */
   public getState(): ServerState {
     return this.state;
   }
 
+  /**
+   * Returns the port the server is listening on.
+   *
+   * @returns The port number.
+   */
   public getPort(): number {
     return this.port;
   }
 
+  /**
+   * Starts the UDP server and begins listening for datagrams.
+   * Uses RetryScheduler for automatic retry on bind failures.
+   *
+   * @returns Promise that resolves when server is listening.
+   * @throws Error if server fails to bind after max retries.
+   * @example
+   * ```typescript
+   * try {
+   *   await udpServer.start();
+   *   console.log("Server started on port", udpServer.getPort());
+   * } catch (err) {
+   *   console.error("Failed to start server:", err);
+   * }
+   * ```
+   */
   public async start(): Promise<void> {
     if (this.state !== ServerState.Stopped) return;
 
@@ -71,8 +142,8 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
 
     this.setState(ServerState.Starting);
 
-    this.logger.info(
-      `Initializing UDP listener "${this.listenerName}" on ${this.address}:${this.port}`,
+    this.logger.debug(
+      `Initializing ${this.getNameArrow()} UDP listener on ${this.address}:${this.port}`,
     );
 
     try {
@@ -82,7 +153,9 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
       if (isAbortError(err)) {
         // Cancellation is not a failure.
         this.setState(ServerState.Stopped);
-        this.logger.info("UDP server start aborted.");
+        this.logger.warn(
+          `The ${this.getNameArrow()} UDP server start aborted.`,
+        );
         return;
       }
       this.setState(ServerState.Error);
@@ -90,10 +163,15 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     }
   }
 
+  /**
+   * Stops the UDP server and closes the socket.
+   *
+   * @returns Promise that resolves when the server has stopped.
+   */
   public async stop(): Promise<void> {
     if (this.state === ServerState.Stopped) return;
 
-    this.logger.info("Stopping UDP server...");
+    this.logger.info(`Stopping the ${this.getNameArrow()} UDP server...`);
     this.setState(ServerState.Stopped);
 
     this.abortController.abort();
@@ -150,9 +228,13 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
           removeStartupListeners();
           if (this.state !== ServerState.Stopped) {
             this.logger.warn(
-              "UDP socket closed unexpectedly during bind attempt, retrying ...",
+              `The ${this.getNameArrow()} UDP socket closed unexpectedly during bind attempt, retrying ...`,
             );
-            reject(new Error("UDP socket closed unexpectedly."));
+            reject(
+              new Error(
+                `The ${this.getNameArrow()} UDP socket closed unexpectedly.`,
+              ),
+            );
           }
         };
 
@@ -180,6 +262,8 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
 
   /**
    * Handles binding errors: classifies error and updates state.
+   *
+   * @param err - The error that occurred during bind.
    */
   private handleBindError = (err: NodeJS.ErrnoException): void => {
     // If it's a retryable error (like EADDRINUSE), we usually just reject
@@ -209,13 +293,18 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     this.setState(ServerState.Listening);
     this.retryScheduler.reset();
 
-    this.logger.info(`UDP server listening on ${this.address}:${this.port}`);
+    this.logger.info(
+      `The ${this.getNameArrow()} UDP server listening on ${this.address}:${this.port}`,
+    );
     this.emit(NetworkEvent.Listening);
   };
 
   /**
    * Handles incoming messages (Runtime logic).
    * Note: This is attached via .on(), so it persists after the Promise resolves.
+   *
+   * @param msg - The message buffer received.
+   * @param rinfo - Remote information about the sender.
    */
   private handleMessage = (msg: Buffer, rinfo: RemoteInfo): void => {
     if (!this.socket) return;
@@ -228,7 +317,6 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     };
 
     // Update bytes received metric for OpenTelemetry.
-    // Assuming 'bytesCounter' is available in scope or via 'this.metrics...'
     bytesCounter.add(msg.length, {
       protocol: NetworkProtocol.UDP,
       "peer.address": peer.address,
@@ -238,13 +326,19 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     this.emit(NetworkEvent.Message, { peer, data: msg });
   };
 
-  private setState(state: ServerState) {
+  /**
+   * Returns the name with "<>" of this listener.
+   * Primary for logging and metric tagging.
+   */
+  private getNameArrow(): string {
+    return `<${this.name}>`;
+  }
+
+  private setState(state: ServerState): void {
     if (this.state !== state) {
-      // Update server state metric for OpenTelemetry.
-      // ObservableGauge is an async instrument and cannot be updated directly; store the latest
-      // state on the gauge object for the observable callback to report.
-      (listenerState as any).latestState = state;
-      this.logger.info(`UDP server state: ${this.state} → ${state}`);
+      this.logger.info(
+        `${this.getNameArrow()} ${this.port}/UDP state: ${this.state} → ${state}`,
+      );
       this.state = state;
     }
   }

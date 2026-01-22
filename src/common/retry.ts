@@ -1,45 +1,108 @@
+/**
+ * Retry scheduler with exponential backoff and abort signal support.
+ * @module retry
+ */
+
 import { isAbortError, sleep } from "./abort-aware";
 import { retryAttempts, retryDuration } from "../metrics/otel-metrics";
 
+/**
+ * Context object passed to retry callbacks containing attempt information.
+ */
 export interface RetryContext {
+  /** Current attempt number (1-indexed). */
   attempt: number;
+  /** The error that caused the retry. */
   error: unknown;
+  /** Timestamp when the retry scheduler started. */
   startTime: number;
 }
 
+/**
+ * Configuration options for RetryScheduler.
+ */
 export interface RetrySchedulerOptions {
-  intervalMs: number; // Retry interval in ms.
-  maxRetries?: number; // undefined or 0 = infinite retries.
+  /** Base interval between retry attempts in milliseconds. */
+  intervalMs: number;
+  /** Maximum number of retries. undefined or 0 means infinite retries. */
+  maxRetries?: number;
+  /** Optional AbortSignal to cancel the retry scheduler. */
   signal?: AbortSignal;
+  /** Callback invoked before each retry attempt. */
   onRetry?: (ctx: RetryContext) => void;
+  /** Callback invoked when max retries are exhausted. */
   onExhausted?: (ctx: RetryContext) => void;
+  /** Callback invoked on non-abort errors during wait. */
   onError?: (err: unknown) => void;
 }
 
-/*
- * Schedule retry job based on RetrySchedulerOptions.
- * You can control the retry interval and max retry counts by the RetrySchedulerOptions.
- * You construct a RetryScheduler instance by providing an async worker function and a
- * RetrySchedulerOptions argument to define how and what the scheduler should do.
+/**
+ * Scheduler for retrying failed async operations with configurable backoff.
+ *
+ * Supports:
+ * - Configurable retry intervals and maximum attempts
+ * - AbortSignal integration for cancellation
+ * - OpenTelemetry metrics integration
+ * - Callback hooks for retry lifecycle events
+ *
+ * @example
+ * ```typescript
+ * const scheduler = new RetryScheduler(
+ *   async () => {
+ *     await connectToService();
+ *   },
+ *   {
+ *     intervalMs: 1000,
+ *     maxRetries: 5,
+ *     onRetry: (ctx) => console.log(`Retry attempt ${ctx.attempt}`),
+ *     onExhausted: (ctx) => console.error("Max retries reached", ctx.error),
+ *   }
+ * );
+ *
+ * await scheduler.run();
+ * scheduler.stop();
+ * ```
  */
 export class RetryScheduler {
   private readonly startTime = Date.now();
   private stopped = false;
   private attempt = 0;
 
+  /**
+   * Creates a new RetryScheduler instance.
+   *
+   * @param task - The async function to execute and potentially retry.
+   * @param options - Configuration options for retry behavior.
+   */
   constructor(
     private readonly task: () => Promise<void>,
     private readonly options: RetrySchedulerOptions
   ) {}
 
+  /**
+   * Returns the current attempt number.
+   *
+   * @returns The number of attempts made (0 if never run).
+   */
   public getAttempt(): number {
     return this.attempt;
   }
 
+  /**
+   * Resets the attempt counter to zero.
+   * Useful after a successful operation to allow fresh retry counting.
+   */
   public reset() {
     this.attempt = 0;
   }
 
+  /**
+   * Executes the task with retry logic.
+   * Continues retrying until success, max retries reached, or abort signal triggered.
+   *
+   * @returns Promise that resolves when task succeeds.
+   * @throws {unknown} Rethrows the error if task fails and max retries exhausted or operation aborted.
+   */
   public async run(): Promise<void> {
     while (!this.stopped) {
       try {
@@ -76,6 +139,10 @@ export class RetryScheduler {
     }
   }
 
+  /**
+   * Stops the retry scheduler.
+   * The current or next iteration will exit without error.
+   */
   public stop() {
     this.stopped = true;
   }

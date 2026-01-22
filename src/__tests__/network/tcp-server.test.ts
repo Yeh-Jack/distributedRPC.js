@@ -8,8 +8,6 @@ import { LoggerManager } from "../../common/logger";
 import { sleep } from "../../common/abort-aware";
 
 vi.mock("net");
-vi.mock("../../common/config");
-vi.mock("../../common/logger");
 
 describe("TcpServer full coverage", () => {
   let tcpServer: TcpServer;
@@ -27,20 +25,14 @@ describe("TcpServer full coverage", () => {
     destroy: vi.fn(),
   };
 
-  // Helper to create a fully mocked Net Socket
   const createMockSocket = () => {
-    // We create a local event map for this specific socket instance
-    // to allow multiple sockets to exist independently in the same test.
     const localEvents: Record<string, Function> = {};
 
     return {
       remoteAddress: "127.0.0.1",
       remotePort: 54321,
-      // Store event listeners so we can trigger them manually
       on: vi.fn((event, cb) => {
         localEvents[event] = cb;
-        // Also update the global/shared socketEvents for backward compatibility
-        // with tests that rely on the single 'socketEvents' variable
         socketEvents[event] = cb;
         return this;
       }),
@@ -48,7 +40,6 @@ describe("TcpServer full coverage", () => {
         localEvents[event] = cb;
         return this;
       }),
-      // Trigger an event manually on this socket
       emit: vi.fn((event, ...args) => {
         if (localEvents[event]) {
           localEvents[event](...args);
@@ -68,18 +59,24 @@ describe("TcpServer full coverage", () => {
     serverEvents = {};
     socketEvents = {};
 
-    vi.mocked(ConfigManager.getInstance).mockReturnValue({
+    const mockConfigManager = {
       getCoreConfig: () => ({
         tcp_address: "127.0.0.1",
         tcp_port: 0,
         retry_interval: retryInterval,
         retry_max: 2,
+        service_name: "test-tcp",
       }),
-    } as any);
+    } as unknown as ConfigManager;
 
-    vi.mocked(LoggerManager.getInstance).mockReturnValue({
-      getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-    } as any);
+    const mockLoggerManager = {
+      getLogger: () => ({ 
+        info: vi.fn(), 
+        warn: vi.fn(), 
+        error: vi.fn(),
+        debug: vi.fn(),
+      }),
+    } as unknown as LoggerManager;
 
     mockServer = {
       listen: vi.fn().mockReturnThis(),
@@ -91,7 +88,7 @@ describe("TcpServer full coverage", () => {
     };
 
     vi.mocked(net.createServer).mockReturnValue(mockServer);
-    tcpServer = new TcpServer("test");
+    tcpServer = new TcpServer(mockConfigManager, mockLoggerManager);
   });
 
   it("start → listen → stop (normal path)", async () => {
@@ -118,13 +115,9 @@ describe("TcpServer full coverage", () => {
   it("abort during start", async () => {
     const startPromise = tcpServer.start();
 
-    // Ensure listeners are attached
     await new Promise((r) => setTimeout(r, 0));
 
-    // Simulate abort path inside attemptListen()
     (tcpServer as any).abortController.abort();
-
-    // Force attemptListen to exit by closing server
     serverEvents[NetworkEvent.Close]?.();
 
     await expect(startPromise).resolves.toBeUndefined();
@@ -132,7 +125,6 @@ describe("TcpServer full coverage", () => {
   });
 
   it("non-retryable error goes to Error state", async () => {
-    // Make every listen immediately emit a fatal error
     mockServer.listen.mockImplementation(() => {
       setTimeout(() => {
         serverEvents[NetworkEvent.Error]?.({
@@ -198,7 +190,6 @@ describe("TcpServer full coverage", () => {
     serverEvents[NetworkEvent.Listening]();
     await p;
 
-    // Second call must hit: if (this.state !== Stopped) return;
     await tcpServer.start();
 
     expect(tcpServer.getState()).toBe(ServerState.Listening);
@@ -209,7 +200,6 @@ describe("TcpServer full coverage", () => {
     serverEvents[NetworkEvent.Listening]();
     await p;
 
-    // Hits: if (this.state !== ServerState.Stopped) return;
     await tcpServer.start();
 
     expect(tcpServer.getState()).toBe(ServerState.Listening);
@@ -222,7 +212,6 @@ describe("TcpServer full coverage", () => {
     serverEvents[NetworkEvent.Listening]();
     await p;
 
-    // Port should remain configured when address() is null
     expect(tcpServer.getPort()).toBe(0);
   });
 
@@ -233,7 +222,6 @@ describe("TcpServer full coverage", () => {
     serverEvents[NetworkEvent.Listening]();
     await p;
 
-    // Port remains from config (0)
     expect(tcpServer.getPort()).toBe(0);
   });
 
@@ -252,34 +240,25 @@ describe("TcpServer full coverage", () => {
     tcpServer.emit(ServerState.Error, { error: err });
   });
 
-  it("should abort attemptListen immediately if server is stopped (Guard Clause)", async () => {
-    // 1. Ensure the server is in the 'Stopped' state (default state)
+  it("should abort attemptListen immediately if server is stopped", async () => {
     expect(tcpServer.getState()).toBe(ServerState.Stopped);
 
-    // 2. Access the private method directly
-    // This simulates a scenario where a retry might trigger after the server was stopped
     const promise = (tcpServer as any).attemptListen();
 
-    // 3. Verify it rejects with the specific "Aborted" error from the if-block
     await expect(promise).rejects.toThrow("Aborted");
   });
 
-  it("should handle synchronous errors inside attemptListen (catch block)", async () => {
+  it("should handle synchronous errors inside attemptListen", async () => {
     const syncError = new Error("Synchronous startup failure");
 
-    // 1. Force the server.listen call to throw synchronously
-    // This triggers the 'catch (err)' block inside the Promise executor
     mockServer.listen.mockImplementation(() => {
       throw syncError;
     });
 
-    // 2. call start()
     const startPromise = tcpServer.start();
 
-    // 3. Verify it rejects with the specific error
     await expect(startPromise).rejects.toThrow("Synchronous startup failure");
 
-    // 4. Verify the state transition in the catch block
     expect(tcpServer.getState()).toBe(ServerState.Error);
   });
 
@@ -294,36 +273,25 @@ describe("TcpServer full coverage", () => {
     expect(spy).toHaveBeenCalled();
   });
 
-  // --- Graceful Shutdown Tests ---
-
   it("should forcefully destroy active connections on stop", async () => {
-    // 1. Start Server
     const startPromise = tcpServer.start();
     serverEvents[NetworkEvent.Listening]();
     await startPromise;
 
-    // 2. Simulate multiple client connections
     const socket1 = createMockSocket();
     const socket2 = createMockSocket();
 
-    // Trigger connection handling manually since we are mocking net.createServer
     (tcpServer as any).handleConnection(socket1);
     (tcpServer as any).handleConnection(socket2);
 
-    // 3. Stop Server
-    // This should close the server AND destroy tracked sockets
     await tcpServer.stop();
 
-    // 4. Verify sockets were destroyed
     expect(socket1.destroy).toHaveBeenCalled();
     expect(socket2.destroy).toHaveBeenCalled();
-
-    // 5. Verify server close was called
     expect(mockServer.close).toHaveBeenCalled();
   });
 
-  it("should stop tracking connections when they close naturally (Memory Leak Prevention)", async () => {
-    // 1. Start Server
+  it("should stop tracking connections when they close naturally", async () => {
     const startPromise = tcpServer.start();
     serverEvents[NetworkEvent.Listening]();
     await startPromise;
@@ -331,24 +299,15 @@ describe("TcpServer full coverage", () => {
     const socket = createMockSocket();
     (tcpServer as any).handleConnection(socket);
 
-    // 2. Simulate the socket closing naturally (client disconnects)
-    // We assume your handleConnection logic adds a 'close' listener to the socket
-    // We trigger that specific listener here.
     const closeListener = socketEvents["close"];
     if (closeListener) {
       closeListener();
     } else {
-      // Fallback if your mock setup works differently,
-      // essentially we need to fire the event that removes it from the Set
       socket.emit("close");
     }
 
-    // 3. Stop Server
     await tcpServer.stop();
 
-    // 4. Verify destroy() was NOT called
-    // Since the socket closed naturally, it should have been removed from the Set.
-    // Therefore, stop() should not try to destroy it again.
     expect(socket.destroy).not.toHaveBeenCalled();
   });
 
@@ -366,7 +325,6 @@ describe("TcpServer full coverage", () => {
     const boom = new Error("boom");
     socketEvents[NetworkEvent.Error](boom);
 
-    // Covers: if (!socket.destroyed) socket.destroy();
     expect(aliveSocket.destroy).toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith(
       expect.objectContaining({ error: boom }),
@@ -374,7 +332,6 @@ describe("TcpServer full coverage", () => {
   });
 
   it("socket already destroyed branch", () => {
-    // Prevent unhandled 'error' event
     const errorSpy = vi.fn();
     tcpServer.on(NetworkEvent.Error, errorSpy);
 
@@ -388,12 +345,51 @@ describe("TcpServer full coverage", () => {
     const boom = new Error("boom");
     socketEvents[NetworkEvent.Error](boom);
 
-    // destroy() must NOT be called again when already destroyed
     expect(destroyedSocket.destroy).not.toHaveBeenCalled();
-
-    // Error event still emitted
     expect(errorSpy).toHaveBeenCalledWith(
       expect.objectContaining({ error: boom }),
     );
+  });
+
+  it("should accept custom name parameter", () => {
+    const localMockConfigManager = {
+      getCoreConfig: () => ({
+        tcp_address: "127.0.0.1",
+        tcp_port: 0,
+        retry_interval: retryInterval,
+        retry_max: 2,
+        service_name: "test-tcp",
+      }),
+    } as unknown as ConfigManager;
+
+    const localMockLoggerManager = {
+      getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+    } as unknown as LoggerManager;
+
+    const namedServer = new TcpServer(
+      localMockConfigManager,
+      localMockLoggerManager,
+      "my-custom-server",
+    );
+    expect((namedServer as any).name).toBe("my-custom-server");
+  });
+
+  it("should use default name when not provided", () => {
+    const localMockConfigManager = {
+      getCoreConfig: () => ({
+        tcp_address: "127.0.0.1",
+        tcp_port: 0,
+        retry_interval: retryInterval,
+        retry_max: 2,
+        service_name: "test-tcp",
+      }),
+    } as unknown as ConfigManager;
+
+    const localMockLoggerManager = {
+      getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+    } as unknown as LoggerManager;
+
+    const defaultServer = new TcpServer(localMockConfigManager, localMockLoggerManager);
+    expect((defaultServer as any).name).toBe("tcp-server");
   });
 });

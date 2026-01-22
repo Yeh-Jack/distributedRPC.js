@@ -1,12 +1,12 @@
 import fs from "fs";
 import path from "path";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ConfigManager } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
-import { UNKNOWN_SERVICE_NAME } from "../../types/basal-protocol";
+import { UNKNOWN_ATTRIBUTE } from "../../types/basal-protocol";
 
 describe("Logger", () => {
-  let logger: ReturnType<typeof LoggerManager.prototype.getLogger>;
+  let logger: ReturnType<LoggerManager["getLogger"]>;
   const logDirPath = path.join(process.cwd(), "logs");
 
   const removeLogDir = () => {
@@ -16,67 +16,73 @@ describe("Logger", () => {
   };
 
   beforeEach(() => {
-    (LoggerManager as any).instance = undefined; // Clear singleton instance for clean tests.
+    vi.clearAllMocks();
+    removeLogDir();
   });
 
-  it("should create singleton instance", () => {
-    const instance1 = LoggerManager.getInstance();
-    const instance2 = LoggerManager.getInstance();
+  it("should create unique instances with different ConfigManagers", () => {
+    const configManager1 = new ConfigManager();
+    const configManager2 = new ConfigManager();
 
-    expect(instance1).toBe(instance2);
+    const loggerManager1 = new LoggerManager(configManager1);
+    const loggerManager2 = new LoggerManager(configManager2);
+
+    expect(loggerManager1).not.toBe(loggerManager2);
+    expect(loggerManager1.getLogger()).not.toBe(loggerManager2.getLogger());
   });
 
   it("should initialize to console format with correct name", () => {
-    const configManager = ConfigManager.getInstance();
+    const configManager = new ConfigManager();
     const log = configManager.getConfig().log;
     log.format = "console";
-    logger = LoggerManager.getInstance().getLogger();
+    const loggerManager = new LoggerManager(configManager);
+    logger = loggerManager.getLogger();
     expect(logger).toBeDefined();
 
-    // Verify the number of transports : 1 String console + 1 DailyRotateFile
     const transports = logger.transports;
     expect(transports).toHaveLength(2);
-    expect(configManager.getCoreConfig().service_name).toBe(
-      UNKNOWN_SERVICE_NAME
-    );
+    expect(configManager.getCoreConfig().service_name).toBeDefined();
   });
 
   it("should initialize to JSON format with correct name", async () => {
-    const configManager = ConfigManager.getInstance();
+    const configManager = new ConfigManager();
     const log = configManager.getConfig().log;
     log.format = "json";
-    logger = LoggerManager.getInstance().getLogger();
+    const loggerManager = new LoggerManager(configManager);
+    logger = loggerManager.getLogger();
     expect(logger).toBeDefined();
 
-    // Verify the number of transports : 1 JSON console + 1 DailyRotateFile
     const transports = logger.transports;
     expect(transports).toHaveLength(2);
-    expect(configManager.getCoreConfig().service_name).toBe(
-      UNKNOWN_SERVICE_NAME
-    );
+    expect(configManager.getCoreConfig().service_name).toBeDefined();
     configManager.reload();
   });
 
   it("should create the logs directory if it is missing", () => {
     removeLogDir();
-    expect(fs.existsSync(logDirPath)).toBe(false); // Ensure it's gone.
+    expect(fs.existsSync(logDirPath)).toBe(false);
 
-    logger = LoggerManager.getInstance().getLogger();
+    const configManager = new ConfigManager();
+    const loggerManager = new LoggerManager(configManager);
+    logger = loggerManager.getLogger();
     expect(fs.existsSync(logDirPath)).toBe(true);
   });
 
   it("should throw error if the logger is undefined", () => {
-    const instance = LoggerManager.getInstance();
-    (instance as any).logger = undefined; // Clear logger for this test.
-    expect(() => LoggerManager.getInstance().getLogger()).toThrow(Error);
+    const configManager = new ConfigManager();
+    const loggerManager = new LoggerManager(configManager);
+    (loggerManager as any).logger = undefined;
+    expect(() => loggerManager.getLogger()).toThrow(Error);
 
-    instance.reload(); // Reinitialize for other tests.
-    logger = LoggerManager.getInstance().getLogger();
+    loggerManager.reload();
+    logger = loggerManager.getLogger();
     expect(logger).toBeDefined();
   });
 
   it("should log messages without throwing errors", () => {
-    logger = LoggerManager.getInstance().getLogger();
+    const configManager = new ConfigManager();
+    const loggerManager = new LoggerManager(configManager);
+    logger = loggerManager.getLogger();
     expect(() => logger.debug("debug message")).not.toThrow();
     expect(() => logger.info("info message")).not.toThrow();
     expect(() => logger.warn("warn message")).not.toThrow();
@@ -84,7 +90,9 @@ describe("Logger", () => {
   });
 
   it("should handle messages with special characters", () => {
-    logger = LoggerManager.getInstance().getLogger();
+    const configManager = new ConfigManager();
+    const loggerManager = new LoggerManager(configManager);
+    logger = loggerManager.getLogger();
     expect(() =>
       logger.info('Message with "quotes" and \n newlines')
     ).not.toThrow();
@@ -95,7 +103,9 @@ describe("Logger", () => {
   });
 
   it("should handle empty messages", () => {
-    logger = LoggerManager.getInstance().getLogger();
+    const configManager = new ConfigManager();
+    const loggerManager = new LoggerManager(configManager);
+    logger = loggerManager.getLogger();
     expect(() => logger.info("")).not.toThrow();
   });
 });

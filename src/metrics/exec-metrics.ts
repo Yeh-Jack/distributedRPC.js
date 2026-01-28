@@ -24,7 +24,7 @@ import { LoggerManager } from "../common/logger";
  */
 @injectable()
 export class ExecutionMetrics {
-  private readonly logger!: ReturnType<LoggerManager["getLogger"]>;
+  private readonly _logger!: ReturnType<LoggerManager["getLogger"]>;
 
   /**
    * Creates an ExecutionMetrics instance.
@@ -34,7 +34,7 @@ export class ExecutionMetrics {
   constructor(
     @inject(TYPES.LoggerManager) loggerManager: LoggerManager | null = null,
   ) {
-    this.logger = loggerManager?.getLogger() ?? (console as any); // Fallback to console if no loggerManager.
+    this._logger = loggerManager?.getLogger() ?? (console as any); // Fallback to console if no loggerManager.
   }
 
   /**
@@ -55,7 +55,7 @@ export class ExecutionMetrics {
     duration: number,
     success: boolean,
   ) {
-    this.logger.debug(
+    this._logger.debug(
       `[EXEC] ${className}.${methodName}: ${duration.toFixed(
         4,
       )}ms, ${success ? "success" : "failed"}.`,

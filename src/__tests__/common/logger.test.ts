@@ -3,7 +3,6 @@ import path from "path";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ConfigManager } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
-import { UNKNOWN_ATTRIBUTE } from "../../types/basal-protocol";
 
 describe("Logger", () => {
   let logger: ReturnType<LoggerManager["getLogger"]>;

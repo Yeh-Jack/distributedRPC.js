@@ -102,7 +102,7 @@ export class ConfigManager<
    * Supports dependency injection via InversifyJS.
    */
   public constructor() {
-    this.config = this.loadConfig();
+    this.config = this._loadConfig();
   }
 
   /**
@@ -141,55 +141,12 @@ export class ConfigManager<
    * @returns A promise that resolves when the configuration has been reloaded.
    */
   public async reload(): Promise<void> {
-    this.config = this.loadConfig();
+    this.config = this._loadConfig();
   }
 
-  /**
-   * Loads the provider configuration from a YAML file.
-   *
-   * The method searches for a `config.yml` file in the current working directory.
-   * If not found, it looks inside a `config` subdirectory. If the configuration file
-   * is not found in either location, it falls back to default configuration values.
-   *
-   * The configuration file is parsed as YAML and merged with default values to ensure
-   * all required fields are present. If any error occurs during loading or parsing,
-   * the default configuration is returned and an error is logged.
-   *
-   * @returns {ProviderConfig<T_App, T_Core>} The loaded and merged provider configuration.
-   */
-  private loadConfig(): ProviderConfig<T_App, T_Core> {
-    // The config file should be in the working directory or inside of the 'config' folder.
-    const configFileName = "config.yml";
-    let configPath = path.join(process.cwd(), configFileName);
-
-    try {
-      if (!fs.existsSync(configPath)) {
-        configPath = path.join(process.cwd(), "config", configFileName);
-        if (!fs.existsSync(configPath)) {
-          console.debug("Config file not found, use default value instead.");
-          return this.getDefaultConfig();
-        }
-      }
-
-      const yamlContent = fs.readFileSync(configPath, "utf8");
-      // Use unknown as intermediate to safely cast to Partial
-      const parsed = (yaml.load(yamlContent) || {}) as Partial<
-        ProviderConfig<T_App, T_Core>
-      >;
-      return this.mergeWithDefaults(parsed);
-    } catch (error) {
-      console.error("Error loading config, using defaults:", error);
-      return this.getDefaultConfig();
-    }
-  }
-
-  private getDefaultConfig(): ProviderConfig<T_App, T_Core> {
-    return {
-      app: this.getDefaultAppConfig(),
-      core: this.getDefaultCoreConfig(),
-      log: this.getDefaultLogConfig(),
-    };
-  }
+  // --------------------------------------------
+  // Protected Methods
+  // --------------------------------------------
 
   protected getDefaultAppConfig(): T_App {
     return {} as T_App;
@@ -208,7 +165,19 @@ export class ConfigManager<
     } as T_Core;
   }
 
-  private getDefaultLogConfig(): LogConfig {
+  // --------------------------------------------
+  // Private Methods
+  // --------------------------------------------
+
+  private _getDefaultConfig(): ProviderConfig<T_App, T_Core> {
+    return {
+      app: this.getDefaultAppConfig(),
+      core: this.getDefaultCoreConfig(),
+      log: this._getDefaultLogConfig(),
+    };
+  }
+
+  private _getDefaultLogConfig(): LogConfig {
     const logFormat =
       AppEnv.production === getAppEnv() ? LogFormat.JSON : LogFormat.CONSOLE;
     return {
@@ -220,6 +189,45 @@ export class ConfigManager<
   }
 
   /**
+   * Loads the provider configuration from a YAML file.
+   *
+   * The method searches for a `config.yml` file in the current working directory.
+   * If not found, it looks inside a `config` subdirectory. If the configuration file
+   * is not found in either location, it falls back to default configuration values.
+   *
+   * The configuration file is parsed as YAML and merged with default values to ensure
+   * all required fields are present. If any error occurs during loading or parsing,
+   * the default configuration is returned and an error is logged.
+   *
+   * @returns {ProviderConfig<T_App, T_Core>} The loaded and merged provider configuration.
+   */
+  private _loadConfig(): ProviderConfig<T_App, T_Core> {
+    // The config file should be in the working directory or inside of the 'config' folder.
+    const configFileName = "config.yml";
+    let configPath = path.join(process.cwd(), configFileName);
+
+    try {
+      if (!fs.existsSync(configPath)) {
+        configPath = path.join(process.cwd(), "config", configFileName);
+        if (!fs.existsSync(configPath)) {
+          console.debug("Config file not found, use default value instead.");
+          return this._getDefaultConfig();
+        }
+      }
+
+      const yamlContent = fs.readFileSync(configPath, "utf8");
+      // Use unknown as intermediate to safely cast to Partial
+      const parsed = (yaml.load(yamlContent) || {}) as Partial<
+        ProviderConfig<T_App, T_Core>
+      >;
+      return this._mergeWithDefaults(parsed);
+    } catch (error) {
+      console.error("Error loading config, using defaults:", error);
+      return this._getDefaultConfig();
+    }
+  }
+
+  /**
    * Merges the provided partial configuration with the default configuration.
    *
    * - Performs a shallow merge for the `app` property.
@@ -228,10 +236,10 @@ export class ConfigManager<
    * @param parsed - A partial provider configuration object to merge with defaults.
    * @returns A complete provider configuration object with defaults applied where necessary.
    */
-  private mergeWithDefaults(
+  private _mergeWithDefaults(
     parsed: Partial<ProviderConfig<T_App, T_Core>>,
   ): ProviderConfig<T_App, T_Core> {
-    const defaults = this.getDefaultConfig();
+    const defaults = this._getDefaultConfig();
     return {
       // Shallow merge for app, deep merge for core and log.
       app: { ...defaults.app, ...parsed.app },

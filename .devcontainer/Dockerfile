@@ -36,11 +36,10 @@ RUN \
     # Install pnpm and opencode TUI.
     npm install -g pnpm@$PNPM_VERSION opencode-ai && \
     # Install corepack.
-    corepack enable && corepack use pnpm@$PNPM_VERSION
+    corepack enable && corepack use pnpm@$PNPM_VERSION && \
     # Change default shell from bash to zsh for the root and node users only.
     #sed -i -E "s|^(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:).*|\1$DEF_SHELL|" /etc/passwd && \
     #sed -i -E "s|^(node:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:).*|\1$DEF_SHELL|" /etc/passwd && \
-
     # Construct a SSH local forwarding tunnel to $LLM_HOST if obsence.
 #    echo '#nvm alias default $NODE_VERSION && nvm use default\n\n\
 #LAN_LLM_HOST="$LLM_HOST"\n\
@@ -52,7 +51,7 @@ RUN \
 #    echo "Port $LLM_PORT is already listening."\n\
 #fi' >> /etc/zsh/zshrc && \
     # Add default LLaMA model configuration for Continue extension.
-RUN mkdir -p /home/${USER}/.continue && \
+    mkdir -p /home/${USER}/.continue && \
 echo "name: Local Config\n\
 version: 1.0.0\n\
 schema: v1\n\

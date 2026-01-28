@@ -41,14 +41,14 @@ export class ServiceManager {
   protected configManager!: ConfigManager;
   protected logger!: ReturnType<LoggerManager["getLogger"]>;
 
-  private initialized: boolean = false;
-  private loggerManager!: LoggerManager;
-  private state: ServerState = ServerState.Stopped;
+  private _initialized: boolean = false;
+  private _loggerManager!: LoggerManager;
+  private _state: ServerState = ServerState.Stopped;
 
   // Resources should be released during shutdown.
-  private metrics!: OtelMeterics;
-  private metricsCallback?: ObservableCallback;
-  private services: Map<string, any> = new Map();
+  private _metrics!: OtelMeterics;
+  private _metricsCallback?: ObservableCallback;
+  private _services: Map<string, any> = new Map();
 
   /**
    * Creates a ServiceManager instance with the provided dependencies.
@@ -60,9 +60,9 @@ export class ServiceManager {
     @inject(TYPES.ConfigManager) configManager: ConfigManager,
     @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
   ) {
-    this.setConfigManager(configManager);
-    this.setLoggerManager(loggerManager);
-    this.initializeMetrics();
+    this._setConfigManager(configManager);
+    this._setLoggerManager(loggerManager);
+    this._initializeMetrics();
   }
 
   /**
@@ -89,7 +89,7 @@ export class ServiceManager {
    * @returns The OtelMeterics instance.
    */
   public getMetrics(): OtelMeterics {
-    return this.metrics;
+    return this._metrics;
   }
 
   /**
@@ -108,7 +108,7 @@ export class ServiceManager {
    * @returns The TcpServer instance or undefined if not found.
    */
   public getTcpServer(name: string): TcpServer | undefined {
-    return this.services.get(name) as TcpServer;
+    return this._services.get(name) as TcpServer;
   }
 
   /**
@@ -118,7 +118,7 @@ export class ServiceManager {
    * @returns The BroadcastUdpServer instance or undefined if not found.
    */
   public getUdpServer(name: string): BroadcastUdpServer | undefined {
-    return this.services.get(name) as BroadcastUdpServer | undefined;
+    return this._services.get(name) as BroadcastUdpServer | undefined;
   }
 
   /**
@@ -137,17 +137,17 @@ export class ServiceManager {
    * @returns Promise that resolves when resources are released.
    */
   protected async releaseResources(): Promise<void> {
-    if (this.metrics) {
-      await this.metrics.shutdown();
-      this.metrics = undefined as unknown as OtelMeterics;
+    if (this._metrics) {
+      await this._metrics.shutdown();
+      this._metrics = undefined as unknown as OtelMeterics;
     }
 
-    if (this.metricsCallback) {
-      listenerState.removeCallback(this.metricsCallback);
-      this.metricsCallback = undefined;
+    if (this._metricsCallback) {
+      listenerState.removeCallback(this._metricsCallback);
+      this._metricsCallback = undefined;
     }
 
-    this.initialized = false;
+    this._initialized = false;
   }
 
   /**
@@ -158,10 +158,10 @@ export class ServiceManager {
   public async reload(): Promise<void> {
     if (this.configManager) {
       this.configManager.reload();
-      this.setConfigManager(this.configManager);
+      this._setConfigManager(this.configManager);
 
-      this.loggerManager.reload();
-      this.setLoggerManager(this.loggerManager);
+      this._loggerManager.reload();
+      this._setLoggerManager(this._loggerManager);
     }
   }
 
@@ -176,7 +176,7 @@ export class ServiceManager {
 
     await this.releaseResources();
 
-    await this.initializeMetrics();
+    await this._initializeMetrics();
     await this.start();
   }
 
@@ -198,20 +198,20 @@ export class ServiceManager {
    * @returns Promise that resolves when initialization is complete.
    */
   public async start(): Promise<void> {
-    if (!this.initialized) {
+    if (!this._initialized) {
       this.logger.debug(`Initializing ${this.getArrowedIdentity()} ...`);
       this.initialize();
-      this.initialized = true;
+      this._initialized = true;
       this.logger.debug(`${this.getArrowedIdentity()} initialized.`);
     }
-    this.setState(ServerState.Starting);
+    this._setState(ServerState.Starting);
 
     // Initialize all services including TCP and UDP listeners.
-    await this.initializeTcpListener("register");
-    await this.initializeBroadcastListener("reception");
+    await this._initializeTcpListener("register");
+    await this._initializeBroadcastListener("reception");
 
     this.logger.info(`${this.getArrowedIdentity()} started successfully.`);
-    this.setState(ServerState.Running);
+    this._setState(ServerState.Running);
   }
 
   /**
@@ -221,10 +221,10 @@ export class ServiceManager {
    */
   public async stop(): Promise<void> {
     this.logger.info("Stopping all services ...");
-    this.setState(ServerState.Stopping);
+    this._setState(ServerState.Stopping);
     const wait: Promise<void>[] = [];
 
-    for (const [name, service] of this.services.entries()) {
+    for (const [name, service] of this._services.entries()) {
       if (typeof service.stop === "function") {
         const stopPromise = service
           .stop()
@@ -243,15 +243,19 @@ export class ServiceManager {
     }
 
     await Promise.all(wait);
-    this.services.clear();
+    this._services.clear();
     this.logger.info(`${this.getArrowedIdentity()} stopped.`);
-    this.setState(ServerState.Stopped);
+    this._setState(ServerState.Stopped);
   }
 
-  private collectServerInfo(): AccessPoint {
+  // --------------------------------------------
+  // Private Methods
+  // --------------------------------------------
+
+  private _collectServerInfo(): AccessPoint {
     // Get TCP server information.
     const tcpServerName = "register";
-    const tcpServer = this.services.get(tcpServerName);
+    const tcpServer = this._services.get(tcpServerName);
     if (!tcpServer) {
       // || !(tcpServer instanceof TcpServer)
       const message = `The <${tcpServerName}> TCP server not initiated.`;
@@ -278,57 +282,15 @@ export class ServiceManager {
     return srvInfo;
   }
 
-  private async initializeMetrics(): Promise<void> {
-    // Initialize OpenTelemetry metrics with service resource attributes.
-    const resourceAttr: DetectedResourceAttributes = {
-      "service.name": this.PROTOCOL.provider.name,
-      "service.version": this.PROTOCOL.provider.version,
-      "service.instance.id": this.PROTOCOL.provider.id,
-      "protocol.version": this.PROTOCOL.protocol_ver,
-      "deployment.environment": getAppEnv() || AppEnv.development,
-    };
-    this.metrics = new OtelMeterics(resourceAttr);
-
-    this.metricsCallback = ServerStateMetric.createCallback();
-    listenerState.addCallback(this.metricsCallback);
-
-    ServerStateMetric.setInstanceState(
-      ServerState.Stopped,
-      this.PROTOCOL.provider.name,
-      this.PROTOCOL.provider.id,
-    );
-  }
-
-  /**
-   * Initializes and starts a TCP listener.
-   *
-   * @param name - Unique name for this listener.
-   * @returns Promise that resolves when the listener is started.
-   */
-  private async initializeTcpListener(name: string): Promise<void> {
-    try {
-      const tcpServer: TcpServer = createNamedTcpServer(name);
-      await tcpServer.start();
-      this.services.set(name, tcpServer);
-    } catch (error) {
-      this.logger.error(
-        `Failed to initialize the <${name}> TCP listener: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
-      );
-      throw error;
-    }
-  }
-
   /**
    * Initializes and starts a broadcast UDP listener for service discovery.
    *
    * @returns Promise that resolves when the listener is started.
    */
-  private async initializeBroadcastListener(name: string): Promise<void> {
+  private async _initializeBroadcastListener(name: string): Promise<void> {
     try {
       // Prepare the ServiceManager information.
-      const ap: AccessPoint = this.collectServerInfo();
+      const ap: AccessPoint = this._collectServerInfo();
       const response: BroadcastResponse = {
         manager: {
           ...this.PROTOCOL,
@@ -347,7 +309,7 @@ export class ServiceManager {
       broadcastServer.setManagerInfo(response);
 
       await broadcastServer.start();
-      this.services.set(name, broadcastServer);
+      this._services.set(name, broadcastServer);
     } catch (error) {
       this.logger.error(
         `Failed to initialize the <${name}> broadcast UDP listener: ${
@@ -358,16 +320,68 @@ export class ServiceManager {
     }
   }
 
-  private setConfigManager(configManager: ConfigManager) {
-    this.configManager = configManager;
-    this.updateServiceName();
+  private async _initializeMetrics(): Promise<void> {
+    // Initialize OpenTelemetry metrics with service resource attributes.
+    const resourceAttr: DetectedResourceAttributes = {
+      "service.name": this.PROTOCOL.provider.name,
+      "service.version": this.PROTOCOL.provider.version,
+      "service.instance.id": this.PROTOCOL.provider.id,
+      "protocol.version": this.PROTOCOL.protocol_ver,
+      "deployment.environment": getAppEnv() || AppEnv.development,
+    };
+    this._metrics = new OtelMeterics(resourceAttr);
+
+    this._metricsCallback = ServerStateMetric.createCallback();
+    listenerState.addCallback(this._metricsCallback);
+
+    ServerStateMetric.setInstanceState(
+      ServerState.Stopped,
+      this.PROTOCOL.provider.name,
+      this.PROTOCOL.provider.id,
+    );
   }
 
-  private setLoggerManager(loggerManager: LoggerManager) {
+  /**
+   * Initializes and starts a TCP listener.
+   *
+   * @param name - Unique name for this listener.
+   * @returns Promise that resolves when the listener is started.
+   */
+  private async _initializeTcpListener(name: string): Promise<void> {
+    try {
+      const tcpServer: TcpServer = createNamedTcpServer(name);
+      await tcpServer.start();
+      this._services.set(name, tcpServer);
+    } catch (error) {
+      this.logger.error(
+        `Failed to initialize the <${name}> TCP listener: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Encapsulate jobs for setting ConfigManager.
+   *
+   * @param configManager
+   */
+  private _setConfigManager(configManager: ConfigManager) {
+    this.configManager = configManager;
+    this._updateServiceName();
+  }
+
+  /**
+   * Encapsulate jobs for setting LoggerManager.
+   *
+   * @param loggerManager
+   */
+  private _setLoggerManager(loggerManager: LoggerManager) {
     // The initial / injected LoggerManager has no service_name set, so we need to reload it after updating the config.
     loggerManager?.reload();
 
-    this.loggerManager = loggerManager;
+    this._loggerManager = loggerManager;
     this.logger = loggerManager?.getLogger() ?? (console as any); // Fallback to console if no loggerManager.
   }
 
@@ -379,19 +393,19 @@ export class ServiceManager {
    * This method updates both the internal state and the OpenTelemetry observable gauge.
    * The state change is logged and the metric is updated via the ServerStateMetric class.
    */
-  private setState(state: ServerState): void {
-    if (this.state !== state) {
+  private _setState(state: ServerState): void {
+    if (this._state !== state) {
       // Update the server state metric for OpenTelemetry
       ServerStateMetric.setState(state);
 
       this.logger.info(
-        `${this.getArrowedIdentity()} state: ${this.state} → ${state}.`,
+        `${this.getArrowedIdentity()} state: ${this._state} → ${state}.`,
       );
-      this.state = state;
+      this._state = state;
     }
   }
 
-  private updateServiceName() {
+  private _updateServiceName() {
     const coreConfig = this.configManager.getCoreConfig();
     const svcName = coreConfig.service_name;
     if (svcName && svcName !== UNKNOWN_ATTRIBUTE) {

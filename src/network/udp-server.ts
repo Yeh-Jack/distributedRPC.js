@@ -51,14 +51,14 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   protected configManager: ConfigManager;
   protected logger: ReturnType<LoggerManager["getLogger"]>;
 
-  private loggerManager: LoggerManager;
-  private abortController!: AbortController;
-  private retryScheduler!: RetryScheduler;
-  private state: ServerState = ServerState.Stopped;
+  private _loggerManager: LoggerManager;
+  private _abortController!: AbortController;
+  private _retryScheduler!: RetryScheduler;
+  private _state: ServerState = ServerState.Stopped;
 
-  private socket!: UdpSocket | undefined;
-  private address!: string;
-  private port!: number;
+  private _socket!: UdpSocket | undefined;
+  private _address!: string;
+  private _port!: number;
 
   /**
    * Creates a new UDP server instance.
@@ -74,7 +74,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   ) {
     super();
     this.configManager = configManager;
-    this.loggerManager = loggerManager;
+    this._loggerManager = loggerManager;
     this.logger = loggerManager.getLogger();
     this.name = name;
   }
@@ -88,7 +88,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
    * @returns dgram.Socket
    */
   public getSocket(): UdpSocket | undefined {
-    return this.socket;
+    return this._socket;
   }
 
   /**
@@ -97,7 +97,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
    * @returns The current ServerState (Stopped, Starting, Running, Listening, etc.).
    */
   public getState(): ServerState {
-    return this.state;
+    return this._state;
   }
 
   /**
@@ -106,7 +106,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
    * @returns The port number.
    */
   public getPort(): number {
-    return this.port;
+    return this._port;
   }
 
   /**
@@ -126,24 +126,24 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
    * ```
    */
   public async start(): Promise<void> {
-    if (this.state !== ServerState.Stopped) return;
+    if (this._state !== ServerState.Stopped) return;
 
     const config = this.configManager.getCoreConfig();
-    this.logger = this.loggerManager.getLogger(); // Reload the logger, in case the loggerManager is reloaded.
-    this.abortController = new AbortController();
-    this.address = config.udp_address;
-    this.port = config.udp_port; // Default to 5707.
+    this.logger = this._loggerManager.getLogger(); // Reload the logger, in case the loggerManager is reloaded.
+    this._abortController = new AbortController();
+    this._address = config.udp_address;
+    this._port = config.udp_port; // Default to 5707.
 
-    this.retryScheduler = new RetryScheduler(() => this.attemptBind(), {
+    this._retryScheduler = new RetryScheduler(() => this._attemptBind(), {
       intervalMs: config.retry_interval,
       maxRetries: config.retry_max,
-      signal: this.abortController.signal,
+      signal: this._abortController.signal,
       onRetry: (ctx) => {
-        this.setState(ServerState.Retrying);
+        this._setState(ServerState.Retrying);
         this.logger.warn(`Retry attempt #${ctx.attempt}.`);
       },
       onExhausted: (ctx) => {
-        this.setState(ServerState.Error);
+        this._setState(ServerState.Error);
         this.logger.error(`Retry exhausted after ${ctx.attempt} attempts.`);
       },
       onError: (err) => {
@@ -151,25 +151,25 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
       },
     });
 
-    this.setState(ServerState.Starting);
+    this._setState(ServerState.Starting);
 
     this.logger.debug(
-      `Initializing ${this.getArrowedName()} UDP listener on ${this.address}:${this.port}`,
+      `Initializing ${this.getArrowedName()} UDP listener on ${this._address}:${this._port}`,
     );
 
     try {
       // Use RetryScheduler.run() as the main retry loop
-      await this.retryScheduler.run();
+      await this._retryScheduler.run();
     } catch (err) {
       if (isAbortError(err)) {
         // Cancellation is not a failure.
-        this.setState(ServerState.Stopped);
+        this._setState(ServerState.Stopped);
         this.logger.warn(
           `The ${this.getArrowedName()} UDP server start aborted.`,
         );
         return;
       }
-      this.setState(ServerState.Error);
+      this._setState(ServerState.Error);
       throw err;
     }
   }
@@ -180,96 +180,31 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
    * @returns Promise that resolves when the server has stopped.
    */
   public async stop(): Promise<void> {
-    if (this.state === ServerState.Stopped) return;
+    if (this._state === ServerState.Stopped) return;
 
     this.logger.info(`Stopping the ${this.getArrowedName()} UDP server...`);
-    this.setState(ServerState.Stopped);
+    this._setState(ServerState.Stopped);
 
-    this.abortController.abort();
-    this.retryScheduler?.stop();
+    this._abortController.abort();
+    this._retryScheduler?.stop();
 
-    if (!this.socket) return;
+    if (!this._socket) return;
 
-    this.socket.close();
-    this.socket = undefined;
+    this._socket.close();
+    this._socket = undefined;
   }
 
-  // -------------------------------
-  // Single attempt to bind
-  // -------------------------------
+  // --------------------------------------------
+  // Protected Methods
+  // --------------------------------------------
 
-  private async attemptBind(): Promise<void> {
-    if (this.state === ServerState.Stopped) {
-      throw new DOMException("Aborted", "AbortError");
-    }
-
-    return new Promise<void>((resolve, reject) => {
-      try {
-        this.socket = dgram.createSocket("udp4");
-
-        // 1. Define cleanup for the "start-up" phase listeners
-        const removeStartupListeners = () => {
-          this.socket?.off(NetworkEvent.Listening, onStartupListening);
-          this.socket?.off(NetworkEvent.Error, onStartupError);
-          this.socket?.off(NetworkEvent.Close, onStartupClose);
-        };
-
-        // 2. Define the bridge handlers that link Class Logic to this specific Promise
-        const onStartupListening = () => {
-          removeStartupListeners();
-          this.handleBindSuccess();
-          resolve();
-        };
-
-        const onStartupError = (err: NodeJS.ErrnoException) => {
-          removeStartupListeners();
-          // We don't close the socket here because handleBindError might decide
-          // to keep it or the retry logic handles it, but usually we close on error.
-          this.socket?.close();
-
-          try {
-            this.handleBindError(err);
-            reject(err);
-          } catch (e) {
-            reject(e); // Catch if handleBindError throws
-          }
-        };
-
-        const onStartupClose = () => {
-          removeStartupListeners();
-          if (this.state !== ServerState.Stopped) {
-            this.logger.warn(
-              `The ${this.getArrowedName()} UDP socket closed unexpectedly during bind attempt, retrying ...`,
-            );
-            reject(
-              new Error(
-                `The ${this.getArrowedName()} UDP socket closed unexpectedly.`,
-              ),
-            );
-          }
-        };
-
-        // 3. Attach Listeners
-        // Startup listeners (One-time use for the Promise)
-        this.socket.once(NetworkEvent.Listening, onStartupListening);
-        this.socket.once(NetworkEvent.Error, onStartupError);
-        this.socket.once(NetworkEvent.Close, onStartupClose);
-
-        // Runtime listener (Permanent)
-        this.socket.on(NetworkEvent.Message, this.handleMessage.bind(this));
-
-        // 4. Bind
-        this.socket.bind(this.port, this.address);
-      } catch (err) {
-        this.setState(ServerState.Error);
-        reject(err);
-      }
-    });
+  /**
+   * Returns the name with "<>" of this listener.
+   * Primary for logging and metric tagging.
+   */
+  protected getArrowedName(): string {
+    return `<${this.name}>`;
   }
-
-  // --------------------------------------------------------------------------
-  // Private Handler Methods
-  // --------------------------------------------------------------------------
 
   /**
    * Handles binding errors: classifies error and updates state.
@@ -284,7 +219,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     }
 
     // Critical error
-    this.setState(ServerState.Error);
+    this._setState(ServerState.Error);
     this.emit(NetworkEvent.Error, {
       error: err,
       peer: undefined, // No peer associated with a bind error
@@ -297,16 +232,16 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
    */
   protected handleBindSuccess(): void {
     // Update port if ephemeral (configured to listen on port 0).
-    const addr = this.socket?.address();
+    const addr = this._socket?.address();
     if (addr && typeof addr === "object") {
-      this.port = addr.port;
+      this._port = addr.port;
     }
 
-    this.setState(ServerState.Listening);
-    this.retryScheduler.reset();
+    this._setState(ServerState.Listening);
+    this._retryScheduler.reset();
 
     this.logger.info(
-      `The ${this.getArrowedName()} UDP server listening on <${this.address}:${this.port}>`,
+      `The ${this.getArrowedName()} UDP server listening on <${this._address}:${this._port}>`,
     );
     this.emit(NetworkEvent.Listening);
   }
@@ -322,11 +257,11 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
    * @param rinfo - Remote information about the sender.
    */
   protected handleMessage(msg: Buffer, rinfo: RemoteInfo): void {
-    if (!this.socket) return;
+    if (!this._socket) return;
 
     const peer: NetworkPeer = {
       protocol: NetworkProtocol.UDP,
-      socket: this.socket,
+      socket: this._socket,
       address: rinfo.address,
       port: rinfo.port,
     };
@@ -341,20 +276,85 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     this.emit(NetworkEvent.Message, { peer, data: msg });
   }
 
-  /**
-   * Returns the name with "<>" of this listener.
-   * Primary for logging and metric tagging.
-   */
-  protected getArrowedName(): string {
-    return `<${this.name}>`;
+  // --------------------------------------------
+  // Private Methods
+  // --------------------------------------------
+
+  private async _attemptBind(): Promise<void> {
+    if (this._state === ServerState.Stopped) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      try {
+        this._socket = dgram.createSocket("udp4");
+
+        // 1. Define cleanup for the "start-up" phase listeners
+        const removeStartupListeners = () => {
+          this._socket?.off(NetworkEvent.Listening, onStartupListening);
+          this._socket?.off(NetworkEvent.Error, onStartupError);
+          this._socket?.off(NetworkEvent.Close, onStartupClose);
+        };
+
+        // 2. Define the bridge handlers that link Class Logic to this specific Promise
+        const onStartupListening = () => {
+          removeStartupListeners();
+          this.handleBindSuccess();
+          resolve();
+        };
+
+        const onStartupError = (err: NodeJS.ErrnoException) => {
+          removeStartupListeners();
+          // We don't close the socket here because handleBindError might decide
+          // to keep it or the retry logic handles it, but usually we close on error.
+          this._socket?.close();
+
+          try {
+            this.handleBindError(err);
+            reject(err);
+          } catch (e) {
+            reject(e); // Catch if handleBindError throws
+          }
+        };
+
+        const onStartupClose = () => {
+          removeStartupListeners();
+          if (this._state !== ServerState.Stopped) {
+            this.logger.warn(
+              `The ${this.getArrowedName()} UDP socket closed unexpectedly during bind attempt, retrying ...`,
+            );
+            reject(
+              new Error(
+                `The ${this.getArrowedName()} UDP socket closed unexpectedly.`,
+              ),
+            );
+          }
+        };
+
+        // 3. Attach Listeners
+        // Startup listeners (One-time use for the Promise)
+        this._socket.once(NetworkEvent.Listening, onStartupListening);
+        this._socket.once(NetworkEvent.Error, onStartupError);
+        this._socket.once(NetworkEvent.Close, onStartupClose);
+
+        // Runtime listener (Permanent)
+        this._socket.on(NetworkEvent.Message, this.handleMessage.bind(this));
+
+        // 4. Bind
+        this._socket.bind(this._port, this._address);
+      } catch (err) {
+        this._setState(ServerState.Error);
+        reject(err);
+      }
+    });
   }
 
-  private setState(state: ServerState): void {
-    if (this.state !== state) {
+  private _setState(state: ServerState): void {
+    if (this._state !== state) {
       this.logger.info(
-        `${this.getArrowedName()} ${this.port}/UDP state: ${this.state} → ${state}`,
+        `${this.getArrowedName()} ${this._port}/UDP state: ${this._state} → ${state}`,
       );
-      this.state = state;
+      this._state = state;
     }
   }
 }

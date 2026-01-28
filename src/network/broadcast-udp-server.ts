@@ -19,8 +19,8 @@ import {
 
 @injectable()
 export class BroadcastUdpServer extends UdpServer {
-  private managerInfo: BroadcastResponse | undefined = undefined;
-  private responseBuffer!: Buffer;
+  private _managerInfo: BroadcastResponse | undefined = undefined;
+  private _responseBuffer!: Buffer;
 
   constructor(
     @inject(TYPES.ConfigManager) configManager: ConfigManager,
@@ -38,12 +38,12 @@ export class BroadcastUdpServer extends UdpServer {
    * @param info The information of the ServiceManager.
    */
   public setManagerInfo(info: BroadcastResponse) {
-    this.managerInfo = info;
+    this._managerInfo = info;
   }
 
   public override async start(): Promise<void> {
     await super.start();
-    if (!this.managerInfo) {
+    if (!this._managerInfo) {
       this.logger.warn(
         "ServiceManager information is not configured before starting the broadcast server.",
       );
@@ -54,14 +54,18 @@ export class BroadcastUdpServer extends UdpServer {
     }
 
     // Flaten managerInfo to message Buffer.
-    this.responseBuffer = Buffer.from(JSON.stringify(this.managerInfo));
+    this._responseBuffer = Buffer.from(JSON.stringify(this._managerInfo));
   }
 
   public override async stop(): Promise<void> {
     await super.stop();
-    this.managerInfo = undefined;
-    this.responseBuffer = Buffer.from("");
+    this._managerInfo = undefined;
+    this._responseBuffer = Buffer.from("");
   }
+
+  // --------------------------------------------
+  // Protected Methods
+  // --------------------------------------------
 
   protected override handleMessage(msg: Buffer, rinfo: RemoteInfo): void {
     // Filter illegal message first.
@@ -82,12 +86,12 @@ export class BroadcastUdpServer extends UdpServer {
     super.handleMessage(msg, rinfo);
 
     // Direct reply to the sender
-    socket.send(this.responseBuffer, rinfo.port, rinfo.address, (err) => {
+    socket.send(this._responseBuffer, rinfo.port, rinfo.address, (err) => {
       if (err) {
         this.logger.error(`Error sending response to ${sender}: ${err}`);
       } else {
         this.logger.debug(
-          `Responded ${this.responseBuffer.length} bytes to ${sender}`,
+          `Responded ${this._responseBuffer.length} bytes to ${sender}`,
         );
       }
     });

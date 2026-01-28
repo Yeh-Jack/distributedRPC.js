@@ -247,7 +247,7 @@ export const bytesCounter = netMeter.createCounter("bytes_total", {
  * ```
  */
 export class OtelMeterics {
-  private provider: MeterProvider;
+  private _provider: MeterProvider;
 
   /**
    * Creates and returns a Meter instance with the specified name.
@@ -275,10 +275,10 @@ export class OtelMeterics {
    * ```
    */
   constructor(providerAttr: DetectedResourceAttributes) {
-    this.provider = new MeterProvider({
+    this._provider = new MeterProvider({
       resource: resourceFromAttributes(providerAttr),
     });
-    metrics.setGlobalMeterProvider(this.provider);
+    metrics.setGlobalMeterProvider(this._provider);
   }
 
   /**
@@ -286,6 +286,6 @@ export class OtelMeterics {
    * @returns Promise that resolves when shutdown is complete.
    */
   public async shutdown(): Promise<void> {
-    await this.provider.shutdown();
+    await this._provider.shutdown();
   }
 }

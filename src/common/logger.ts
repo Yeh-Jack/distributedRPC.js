@@ -39,8 +39,8 @@ export enum LogFormat {
  */
 @injectable()
 export class LoggerManager {
-  private logger!: Logger;
-  private configManager: ConfigManager;
+  private _logger!: Logger;
+  private _configManager: ConfigManager;
 
   /**
    * Creates a LoggerManager instance with the injected ConfigManager.
@@ -50,7 +50,7 @@ export class LoggerManager {
   public constructor(
     @inject(TYPES.ConfigManager) configManager: ConfigManager,
   ) {
-    this.configManager = configManager;
+    this._configManager = configManager;
 
     // Create logs directory if it doesn't exist
     const logDir = path.join(process.cwd(), "logs");
@@ -68,12 +68,12 @@ export class LoggerManager {
    * @returns {Logger} The initialized logger instance.
    */
   public getLogger(): Logger {
-    if (!this.logger) {
+    if (!this._logger) {
       throw new Error(
         "The Logger is not initialized yet. Call reload() first.",
       );
     }
-    return this.logger;
+    return this._logger;
   }
 
   /**
@@ -93,7 +93,7 @@ export class LoggerManager {
       json(),
     );
 
-    const logConfig = this.configManager.getConfig().log;
+    const logConfig = this._configManager.getConfig().log;
     const logFormat = logConfig?.format || LogFormat.CONSOLE;
     const activeTransports: any[] = [];
     if (logFormat === LogFormat.CONSOLE) {
@@ -126,7 +126,7 @@ export class LoggerManager {
     }
 
     // Add File Transport for daily rotated logs.
-    const coreConfig = this.configManager.getCoreConfig();
+    const coreConfig = this._configManager.getCoreConfig();
     const svcName = coreConfig.service_name;
     activeTransports.push(
       new DailyRotateFile({
@@ -139,7 +139,7 @@ export class LoggerManager {
       }),
     );
 
-    this.logger = createLogger({
+    this._logger = createLogger({
       level: logConfig.log_level,
       defaultMeta: { svcName: svcName || UNKNOWN_ATTRIBUTE },
       format: errors({ stack: true }), // Ensure all formats get the stack trace
@@ -148,6 +148,6 @@ export class LoggerManager {
   }
 
   public close(): void {
-    this.logger.close();
+    this._logger.close();
   }
 }

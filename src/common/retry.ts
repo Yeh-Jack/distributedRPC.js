@@ -64,9 +64,9 @@ export interface RetrySchedulerOptions {
  * ```
  */
 export class RetryScheduler {
-  private readonly startTime = Date.now();
-  private stopped = false;
-  private attempt = 0;
+  private readonly _startTime = Date.now();
+  private _stopped = false;
+  private _attempt = 0;
 
   /**
    * Creates a new RetryScheduler instance.
@@ -85,7 +85,7 @@ export class RetryScheduler {
    * @returns The number of attempts made (0 if never run).
    */
   public getAttempt(): number {
-    return this.attempt;
+    return this._attempt;
   }
 
   /**
@@ -93,7 +93,7 @@ export class RetryScheduler {
    * Useful after a successful operation to allow fresh retry counting.
    */
   public reset() {
-    this.attempt = 0;
+    this._attempt = 0;
   }
 
   /**
@@ -104,36 +104,36 @@ export class RetryScheduler {
    * @throws {unknown} Rethrows the error if task fails and max retries exhausted or operation aborted.
    */
   public async run(): Promise<void> {
-    while (!this.stopped) {
+    while (!this._stopped) {
       try {
-        this.attempt++;
+        this._attempt++;
         await this.task();
         return; // Success.
       } catch (err) {
         // Record retry metrics for OpenTelemetry.
-        retryAttempts.add(1, { attempt: this.attempt });
+        retryAttempts.add(1, { attempt: this._attempt });
 
         if (isAbortError(err)) {
           throw err; // Cancellation is not a failure.
         }
 
         const ctx: RetryContext = {
-          attempt: this.attempt,
+          attempt: this._attempt,
           error: err,
-          startTime: this.startTime,
+          startTime: this._startTime,
         };
 
-        if (this.isExhausted()) {
+        if (this._isExhausted()) {
           this.options.onExhausted?.(ctx);
           throw err;
         }
 
         this.options.onRetry?.(ctx);
-        await this.waitWithAbort(err);
+        await this._waitWithAbort(err);
       } finally {
         // Record retry duration metrics for OpenTelemetry.
-        retryDuration.record(Date.now() - this.startTime, {
-          attempt: this.attempt,
+        retryDuration.record(Date.now() - this._startTime, {
+          attempt: this._attempt,
         });
       }
     }
@@ -144,19 +144,23 @@ export class RetryScheduler {
    * The current or next iteration will exit without error.
    */
   public stop() {
-    this.stopped = true;
+    this._stopped = true;
   }
 
-  private isExhausted(): boolean {
+  // --------------------------------------------
+  // Private Methods
+  // --------------------------------------------
+
+  private _isExhausted(): boolean {
     const maxtry = this.options.maxRetries;
     return (
       maxtry !== undefined &&
       maxtry > 0 && // Infinity retry if maxRetries is 0.
-      this.attempt >= maxtry
+      this._attempt >= maxtry
     );
   }
 
-  private async waitWithAbort(err: any): Promise<void> {
+  private async _waitWithAbort(err: any): Promise<void> {
     try {
       await sleep(this.options.intervalMs, this.options.signal);
     } catch (sleepErr) {

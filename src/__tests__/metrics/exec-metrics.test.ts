@@ -98,7 +98,12 @@ describe("ExecutionMetrics", () => {
     });
 
     it("should record execution with large duration", () => {
-      metrics.recordExecutionTime("TestService", "slowMethod", 999999.9999, true);
+      metrics.recordExecutionTime(
+        "TestService",
+        "slowMethod",
+        999999.9999,
+        true,
+      );
 
       expect(mockLogger.debug).toHaveBeenCalledWith(
         expect.stringContaining("999999.9999ms"),
@@ -115,10 +120,15 @@ describe("ExecutionMetrics", () => {
 
     it("should record execution time for async methods", async () => {
       const start = Date.now();
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
       const duration = Date.now() - start;
 
-      metrics.recordExecutionTime("AsyncService", "asyncMethod", duration, true);
+      metrics.recordExecutionTime(
+        "AsyncService",
+        "asyncMethod",
+        duration,
+        true,
+      );
 
       expect(mockLogger.debug).toHaveBeenCalled();
     });
@@ -126,7 +136,9 @@ describe("ExecutionMetrics", () => {
 
   describe("fallback behavior", () => {
     it("should use console when LoggerManager is null", () => {
-      const consoleSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+      const consoleSpy = vi
+        .spyOn(console, "debug")
+        .mockImplementation(() => {});
 
       metrics = new ExecutionMetrics(null);
       metrics.recordExecutionTime("TestService", "testMethod", 100, true);
@@ -139,7 +151,9 @@ describe("ExecutionMetrics", () => {
     });
 
     it("should handle recordExecutionTime when logger is console", () => {
-      const consoleSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+      const consoleSpy = vi
+        .spyOn(console, "debug")
+        .mockImplementation(() => {});
 
       metrics = new ExecutionMetrics(null);
       metrics.recordExecutionTime("TestService", "testMethod", 100, true);

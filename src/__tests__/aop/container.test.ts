@@ -7,7 +7,12 @@ import { ConfigManager } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
 import { ExecutionMetrics } from "../../metrics/exec-metrics";
 import { ServiceManager } from "../../manager/service-manager";
-import { TYPES, container, createNamedTcpServer, createNamedUdpServer } from "../../aop/container";
+import {
+  TYPES,
+  container,
+  createNamedTcpServer,
+  createNamedUdpServer,
+} from "../../aop/container";
 
 describe("container", () => {
   beforeEach(() => {
@@ -194,7 +199,9 @@ describe("container", () => {
     });
 
     it("should have ServiceManager bound", () => {
-      const serviceManager = container.get<ServiceManager>(TYPES.ServiceManager);
+      const serviceManager = container.get<ServiceManager>(
+        TYPES.ServiceManager,
+      );
       expect(serviceManager).toBeDefined();
       expect(serviceManager.PROTOCOL).toBeDefined();
     });

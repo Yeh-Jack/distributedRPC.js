@@ -1,9 +1,11 @@
 import "reflect-metadata";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ServiceManager } from "../../manager/service-manager";
 import { ConfigManager } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
 import { ServerState } from "../../types/basal-protocol";
+
+import { BroadcastUdpServer } from "../../network/broadcast-udp-server";
+import { ServiceManager } from "../../manager/service-manager";
 import { TcpServer } from "../../network/tcp-server";
 import { UdpServer } from "../../network/udp-server";
 
@@ -13,6 +15,31 @@ const createMockTcpServer = (name: string) =>
     stop: vi.fn().mockResolvedValue(undefined),
     getState: vi.fn().mockReturnValue(ServerState.Listening),
     getPort: vi.fn().mockReturnValue(0),
+    getServer: vi.fn().mockReturnValue({
+      address: () => ({ port: 8080, address: "127.0.0.1" }),
+    }),
+    name,
+  }) as unknown as TcpServer;
+
+const createMockWoAddrTcpServer = (name: string) =>
+  ({
+    start: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue(undefined),
+    getState: vi.fn().mockReturnValue(ServerState.Listening),
+    getPort: vi.fn().mockReturnValue(0),
+    getServer: vi.fn().mockReturnValue({
+      address: () => undefined,
+    }),
+    name,
+  }) as unknown as TcpServer;
+
+const createFailingMockTcpServer = (name: string) =>
+  ({
+    start: vi.fn().mockRejectedValue(new Error("TCP server failed to start")),
+    stop: vi.fn().mockResolvedValue(undefined),
+    getState: vi.fn().mockReturnValue(ServerState.Error),
+    getPort: vi.fn().mockReturnValue(0),
+    getServer: vi.fn().mockReturnValue({}),
     name,
   }) as unknown as TcpServer;
 
@@ -22,8 +49,19 @@ const createMockUdpServer = (name: string) =>
     stop: vi.fn().mockResolvedValue(undefined),
     getState: vi.fn().mockReturnValue(ServerState.Listening),
     getPort: vi.fn().mockReturnValue(5707),
+    setManagerInfo: vi.fn(),
     name,
-  }) as unknown as UdpServer;
+  }) as unknown as BroadcastUdpServer;
+
+const createFailingMockUdpServer = (name: string) =>
+  ({
+    start: vi.fn().mockRejectedValue(new Error("UDP server failed to start")),
+    stop: vi.fn().mockResolvedValue(undefined),
+    getState: vi.fn().mockReturnValue(ServerState.Error),
+    getPort: vi.fn().mockReturnValue(5707),
+    setManagerInfo: vi.fn(),
+    name,
+  }) as unknown as BroadcastUdpServer;
 
 vi.mock("../../aop/container", () => ({
   container: {
@@ -74,7 +112,9 @@ vi.mock("../../aop/container", () => ({
       return {};
     }),
   },
+
   TYPES: {
+    BroadcastUdpServer: Symbol.for("BroadcastUdpServer"),
     ConfigManager: Symbol.for("ConfigManager"),
     LoggerManager: Symbol.for("LoggerManager"),
     Logger: Symbol.for("Logger"),
@@ -82,8 +122,24 @@ vi.mock("../../aop/container", () => ({
     TcpServer: Symbol.for("TcpServer"),
     UdpServer: Symbol.for("UdpServer"),
   },
-  createNamedTcpServer: vi.fn((name: string) => createMockTcpServer(name)),
-  createNamedUdpServer: vi.fn((name: string) => createMockUdpServer(name)),
+
+  createNamedTcpServer: vi.fn((name: string) => {
+    switch (name) {
+      case "failedOfRegister":
+        return createFailingMockTcpServer(name);
+      case "registerWoAddress":
+        return createMockWoAddrTcpServer(name);
+      default:
+        return createMockTcpServer(name);
+    }
+  }),
+
+  createNamedUdpServer: vi.fn((name: string, srvType: Symbol) => {
+    if (name === "failedOfReception") {
+      return createFailingMockUdpServer(name);
+    }
+    return createMockUdpServer(name);
+  }),
 }));
 
 describe("ServiceManager", () => {
@@ -519,6 +575,93 @@ describe("ServiceManager", () => {
       await serviceManager.start();
 
       expect((serviceManager as any).state).toBe(ServerState.Running);
+    });
+
+    it("should handle none TCP listener error in catch block", async () => {
+      // Mock the logger to capture error messages
+      const errorSpy = vi.spyOn(serviceManager["logger"], "error");
+
+      // Call initializeBroadcastListener directly without TCP server that will cause failure
+      // Error thrown by empty tcpServer check in collectServerInfo().
+      const udpName = "failedOfReception";
+      await expect(() =>
+        (serviceManager as any).initializeBroadcastListener(udpName),
+      ).rejects.toThrow("The <register> TCP server not initiated.");
+
+      // Verify the error was logged properly
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Failed to initialize the <${udpName}> broadcast UDP listener:`,
+        ),
+      );
+    });
+
+    it("should handle TCP listener initialization error in catch block", async () => {
+      // Mock the logger to capture error messages
+      const errorSpy = vi.spyOn(serviceManager["logger"], "error");
+
+      // Initialize the TCP server without address information.
+      let tcpName = "failedOfRegister";
+      await expect(() =>
+        (serviceManager as any).initializeTcpListener(tcpName),
+      ).rejects.toThrow("TCP server failed to start");
+
+      // Verify the error was logged properly
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Failed to initialize the <${tcpName}> TCP listener:`,
+        ),
+      );
+    });
+
+    it("should handle none-address TCP listener error in catch block", async () => {
+      // Mock the logger to capture error messages
+      const errorSpy = vi.spyOn(serviceManager["logger"], "error");
+
+      // Create empty address TcpServer.
+      const tcpName = "registerWoAddress";
+      await (serviceManager as any).initializeTcpListener(tcpName);
+      // Register the non-address TCP server under the expected name.
+      const tcpSrv = (serviceManager as any).services.get(tcpName);
+      expect(tcpSrv.getServer().address()).toBeUndefined();
+      (serviceManager as any).services.set("register", tcpSrv);
+
+      // Error thrown by empty address check in collectServerInfo().
+      const udpName = "failedOfReception";
+      await expect(() =>
+        (serviceManager as any).initializeBroadcastListener(udpName),
+      ).rejects.toThrow("The <register> TCP server not running.");
+
+      // Verify the error was logged properly
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Failed to initialize the <failedOfReception> broadcast UDP listener:",
+        ),
+      );
+    });
+
+    it("should handle UDP listener initialization error in catch block", async () => {
+      // Mock the logger to capture error messages
+      const errorSpy = vi.spyOn(serviceManager["logger"], "error");
+
+      // Initialize a normal TCP server.
+      const tcpName = "register";
+      await (serviceManager as any).initializeTcpListener(tcpName);
+      // Register the non-address TCP server under the expected name.
+      const tcpSrv = (serviceManager as any).services.get(tcpName);
+      expect(tcpSrv.getServer().address()).toBeDefined();
+
+      const udpName = "failedOfReception";
+      await expect(() =>
+        (serviceManager as any).initializeBroadcastListener(udpName),
+      ).rejects.toThrow("UDP server failed to start");
+
+      // Verify the error was logged properly
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Failed to initialize the <${udpName}> broadcast UDP listener:`,
+        ),
+      );
     });
 
     it("should transition to Running even when not in Stopped state initially", async () => {

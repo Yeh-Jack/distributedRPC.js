@@ -70,9 +70,9 @@ describe("TcpServer full coverage", () => {
     } as unknown as ConfigManager;
 
     const mockLoggerManager = {
-      getLogger: () => ({ 
-        info: vi.fn(), 
-        warn: vi.fn(), 
+      getLogger: () => ({
+        info: vi.fn(),
+        warn: vi.fn(),
         error: vi.fn(),
         debug: vi.fn(),
       }),
@@ -170,17 +170,19 @@ describe("TcpServer full coverage", () => {
   });
 
   it("handleConnection full branch coverage", () => {
-    const spy = vi.fn();
-    tcpServer.on(NetworkEvent.Error, spy);
+    const spyData = vi.fn();
+    tcpServer.on(NetworkEvent.Data, spyData);
 
     (tcpServer as any).handleConnection(mockSocket);
 
     socketEvents[NetworkEvent.Data](Buffer.from("hi"));
-    expect(mockSocket.write).toHaveBeenCalledWith("Echo: hi");
+    expect(spyData).toHaveBeenCalled();
 
+    const spyError = vi.fn();
+    tcpServer.on(NetworkEvent.Error, spyError);
     socketEvents[NetworkEvent.Error](new Error("boom"));
     expect(mockSocket.destroy).toHaveBeenCalled();
-    expect(spy).toHaveBeenCalled();
+    expect(spyError).toHaveBeenCalled();
 
     socketEvents[NetworkEvent.Close](true);
   });
@@ -389,7 +391,10 @@ describe("TcpServer full coverage", () => {
       getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
     } as unknown as LoggerManager;
 
-    const defaultServer = new TcpServer(localMockConfigManager, localMockLoggerManager);
+    const defaultServer = new TcpServer(
+      localMockConfigManager,
+      localMockLoggerManager,
+    );
     expect((defaultServer as any).name).toBe("tcp-server");
   });
 });

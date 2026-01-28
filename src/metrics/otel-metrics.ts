@@ -280,4 +280,12 @@ export class OtelMeterics {
     });
     metrics.setGlobalMeterProvider(this.provider);
   }
+
+  /**
+   * Shuts down the meter provider and releases all resources.
+   * @returns Promise that resolves when shutdown is complete.
+   */
+  public async shutdown(): Promise<void> {
+    await this.provider.shutdown();
+  }
 }

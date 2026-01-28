@@ -3,6 +3,7 @@
  * @module network-events
  */
 
+import * as os from "os";
 import { Socket as TcpSocket } from "net";
 import { Socket as UdpSocket } from "dgram";
 
@@ -15,16 +16,6 @@ export const NetworkRetryable = new Set([
   "EADDRNOTAVAIL",
   "ENETDOWN",
 ]);
-
-/**
- * Network protocol types supported by the distributed RPC framework.
- */
-export enum NetworkProtocol {
-  /** Transmission Control Protocol - reliable, connection-oriented communication. */
-  TCP = "TCP",
-  /** User Datagram Protocol - fast, connectionless communication. */
-  UDP = "UDP",
-}
 
 /**
  * Network events emitted by servers and connections.
@@ -44,6 +35,16 @@ export enum NetworkEvent {
   Error = "error",
   /** Server stopped (custom event). */
   Stop = "stop",
+}
+
+/**
+ * Network protocol types supported by the distributed RPC framework.
+ */
+export enum NetworkProtocol {
+  /** Transmission Control Protocol - reliable, connection-oriented communication. */
+  TCP = "TCP",
+  /** User Datagram Protocol - fast, connectionless communication. */
+  UDP = "UDP",
 }
 
 /**
@@ -106,4 +107,42 @@ export interface NetworkMetrics {
   retryAttempts: number;
   /** Current active connections (TCP only). */
   activeConnections?: number;
+}
+
+export function getHostIP(): string {
+  /* Get IP from the explicitily assigned environment variable.
+   * This is useful if the appliation is running in a container.
+   *
+   * You can run the container as :
+   * # Get the first Host IP from all IP addresses of the host (Linux command)
+   * HOST_IP=$(hostname -I | awk '{print $1}')
+   * docker run -e HOST_IP=$HOST_IP -p 3000:3000 my-node-app
+   */
+  const envHostIP = process.env.HOST_IP;
+  if (envHostIP) return envHostIP;
+
+  // Get local IP from network interfaces
+  return getLocalIPv4Address() || "127.0.0.1";
+}
+
+/**
+ * Finds the first non-internal IPv4 address from network interfaces.
+ *
+ * @returns The IPv4 address or null if not found
+ */
+function getLocalIPv4Address(): string | null {
+  const interfaces = os.networkInterfaces();
+  if (!interfaces) return null;
+
+  for (const name of Object.keys(interfaces)) {
+    if (interfaces[name]) {
+      for (const iface of interfaces[name]) {
+        // Skip internal (i.e. 127.0.0.1) and non-ipv4 addresses
+        if (iface.family === "IPv4" && !iface.internal) {
+          return iface.address;
+        }
+      }
+    }
+  }
+  return null;
 }

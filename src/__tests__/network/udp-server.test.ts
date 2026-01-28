@@ -14,7 +14,7 @@ describe("UdpServer", () => {
 
   function createMockSocket() {
     const localListeners: Record<string, Function[]> = {};
-    const sock = {
+    const mockSock = {
       bind: vi.fn(),
       close: vi.fn(() => localListeners["close"]?.forEach((fn) => fn())),
       on: vi.fn((evt, cb) => {
@@ -38,8 +38,8 @@ describe("UdpServer", () => {
       _listeners: localListeners,
     };
 
-    sockets.push(sock);
-    return sock as any;
+    sockets.push(mockSock);
+    return mockSock as any;
   }
 
   beforeEach(() => {
@@ -56,9 +56,9 @@ describe("UdpServer", () => {
     } as unknown as ConfigManager;
 
     const mockLoggerManager = {
-      getLogger: () => ({ 
-        info: vi.fn(), 
-        warn: vi.fn(), 
+      getLogger: () => ({
+        info: vi.fn(),
+        warn: vi.fn(),
         error: vi.fn(),
         debug: vi.fn(),
       }),
@@ -203,9 +203,9 @@ describe("UdpServer", () => {
     } as unknown as ConfigManager;
 
     const testLoggerManager = {
-      getLogger: () => ({ 
-        info: vi.fn(), 
-        warn: vi.fn(), 
+      getLogger: () => ({
+        info: vi.fn(),
+        warn: vi.fn(),
         error: vi.fn(),
         debug: vi.fn(),
       }),
@@ -289,9 +289,9 @@ describe("UdpServer", () => {
     } as unknown as ConfigManager;
 
     const errorLoggerManager = {
-      getLogger: () => ({ 
-        info: vi.fn(), 
-        warn: vi.fn(), 
+      getLogger: () => ({
+        info: vi.fn(),
+        warn: vi.fn(),
         error: vi.fn(),
         debug: vi.fn(),
       }),
@@ -315,8 +315,8 @@ describe("UdpServer", () => {
   });
 
   it("should handle NetworkEvent.Message properly", () => {
-    const messageSpy = vi.fn();
-    udpServer.on(NetworkEvent.Message, messageSpy);
+    const spy = vi.fn();
+    udpServer.on(NetworkEvent.Message, spy);
 
     expect(typeof udpServer.on).toBe("function");
   });
@@ -428,7 +428,10 @@ describe("UdpServer", () => {
       getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
     } as unknown as LoggerManager;
 
-    const defaultServer = new UdpServer(localMockConfigManager, localMockLoggerManager);
+    const defaultServer = new UdpServer(
+      localMockConfigManager,
+      localMockLoggerManager,
+    );
     expect((defaultServer as any).name).toBe("udp-server");
   });
 });

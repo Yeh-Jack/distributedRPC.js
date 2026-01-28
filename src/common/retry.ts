@@ -76,7 +76,7 @@ export class RetryScheduler {
    */
   constructor(
     private readonly task: () => Promise<void>,
-    private readonly options: RetrySchedulerOptions
+    private readonly options: RetrySchedulerOptions,
   ) {}
 
   /**

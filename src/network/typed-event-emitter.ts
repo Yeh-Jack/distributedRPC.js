@@ -28,7 +28,7 @@ import { EventEmitter } from "events";
  * ```
  */
 export class TypedEventEmitter<
-  Events extends { [K in keyof Events]: (...args: any[]) => void }
+  Events extends { [K in keyof Events]: (...args: any[]) => void },
 > extends EventEmitter {
   /**
    * Type-safe event listener registration.

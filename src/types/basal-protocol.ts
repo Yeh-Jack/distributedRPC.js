@@ -1,4 +1,8 @@
 import { randomBytes } from "crypto";
+import { NetworkProtocol } from "../network/network-events";
+
+// Broadcast message for finding ServiceManager.
+export const PROBE_MESSAGE = "Bonjour and EnjoIT.";
 
 /**
  * Unknown attribute constant.
@@ -6,6 +10,15 @@ import { randomBytes } from "crypto";
  * @type {"Unknown"}
  */
 export const UNKNOWN_ATTRIBUTE = "Unknown";
+
+// Connection information of service provider.
+export interface AccessPoint {
+  authorization: string; // Authorization key for accessing this provider.
+  function: string[]; // Capbilities of the provider.
+  host: string; // Host IP of the provider.
+  port: number; // Port number the access point listening on.
+  protocol: NetworkProtocol; // Network protocol of the access point.
+}
 
 /**
  * Application environments.
@@ -18,36 +31,6 @@ export enum AppEnv {
   production = "production",
   staging = "staging",
   test = "test",
-}
-
-/**
- * Types of meters for OpenTelemetry.
- *
- * @public
- * @enum {string}
- */
-export enum MeterType {
-  Application = "application",
-  Network = "network",
-  Host = "host",
-}
-
-/**
- * State of the server.
- *
- * @public
- * @enum {string}
- */
-export enum ServerState {
-  Error = "Error",
-  Halt = "Halt",
-  Halting = "Halting",
-  Listening = "Listening",
-  Retrying = "Retrying",
-  Running = "Running",
-  Starting = "Starting",
-  Stopping = "Stopping",
-  Stopped = "Stopped",
 }
 
 /**
@@ -79,6 +62,44 @@ export interface BasalProtocol {
     desc: string;
     version: string;
   };
+}
+
+// Response message format from ServiceManager.
+export interface BroadcastResponse {
+  manager: BasalProtocol & {
+    // Based on the BasalProtocol format with AccessPoint information merged into provider.
+    provider: BasalProtocol["provider"] & AccessPoint;
+  };
+}
+
+/**
+ * Types of meters for OpenTelemetry.
+ *
+ * @public
+ * @enum {string}
+ */
+export enum MeterType {
+  Application = "application",
+  Network = "network",
+  Host = "host",
+}
+
+/**
+ * State of the server.
+ *
+ * @public
+ * @enum {string}
+ */
+export enum ServerState {
+  Error = "Error",
+  Halt = "Halt",
+  Halting = "Halting",
+  Listening = "Listening",
+  Retrying = "Retrying",
+  Running = "Running",
+  Starting = "Starting",
+  Stopping = "Stopping",
+  Stopped = "Stopped",
 }
 
 /**

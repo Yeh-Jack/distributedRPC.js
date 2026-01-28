@@ -94,11 +94,11 @@ describe("Logger", () => {
     const loggerManager = new LoggerManager(configManager);
     logger = loggerManager.getLogger();
     expect(() =>
-      logger.info('Message with "quotes" and \n newlines')
+      logger.info('Message with "quotes" and \n newlines'),
     ).not.toThrow();
     expect(() => logger.warn("Message with 'single quotes'")).not.toThrow();
     expect(() =>
-      logger.error("Message with special chars: ñáéíóú")
+      logger.error("Message with special chars: ñáéíóú"),
     ).not.toThrow();
   });
 

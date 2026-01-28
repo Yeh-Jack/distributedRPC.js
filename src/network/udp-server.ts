@@ -48,14 +48,15 @@ import {
 export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   public readonly name: string;
 
-  private configManager: ConfigManager;
-  private logger: ReturnType<LoggerManager["getLogger"]>;
+  protected configManager: ConfigManager;
+  protected logger: ReturnType<LoggerManager["getLogger"]>;
 
+  private loggerManager: LoggerManager;
   private abortController!: AbortController;
   private retryScheduler!: RetryScheduler;
   private state: ServerState = ServerState.Stopped;
 
-  private socket: UdpSocket | null = null;
+  private socket!: UdpSocket | undefined;
   private address!: string;
   private port!: number;
 
@@ -73,6 +74,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   ) {
     super();
     this.configManager = configManager;
+    this.loggerManager = loggerManager;
     this.logger = loggerManager.getLogger();
     this.name = name;
   }
@@ -80,6 +82,14 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   // -------------------------------
   // Public API
   // -------------------------------
+
+  /**
+   * Get the listening UDP socket.
+   * @returns dgram.Socket
+   */
+  public getSocket(): UdpSocket | undefined {
+    return this.socket;
+  }
 
   /**
    * Returns the current server state.
@@ -119,6 +129,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     if (this.state !== ServerState.Stopped) return;
 
     const config = this.configManager.getCoreConfig();
+    this.logger = this.loggerManager.getLogger(); // Reload the logger, in case the loggerManager is reloaded.
     this.abortController = new AbortController();
     this.address = config.udp_address;
     this.port = config.udp_port; // Default to 5707.
@@ -180,7 +191,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     if (!this.socket) return;
 
     this.socket.close();
-    this.socket = null;
+    this.socket = undefined;
   }
 
   // -------------------------------
@@ -245,7 +256,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
         this.socket.once(NetworkEvent.Close, onStartupClose);
 
         // Runtime listener (Permanent)
-        this.socket.on(NetworkEvent.Message, this.handleMessage);
+        this.socket.on(NetworkEvent.Message, this.handleMessage.bind(this));
 
         // 4. Bind
         this.socket.bind(this.port, this.address);
@@ -265,7 +276,7 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
    *
    * @param err - The error that occurred during bind.
    */
-  private handleBindError = (err: NodeJS.ErrnoException): void => {
+  protected handleBindError(err: NodeJS.ErrnoException): void {
     // If it's a retryable error (like EADDRINUSE), we usually just reject
     // and let the retryScheduler handle it, without setting global Error state yet.
     if (NetworkRetryable.has(err.code ?? "")) {
@@ -278,13 +289,14 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
       error: err,
       peer: undefined, // No peer associated with a bind error
     });
-  };
+  }
 
   /**
    * Handles successful binding logic: updates state, logs, and resets retry.
+   * Can be overridden by subclasses to add additional behavior.
    */
-  private handleBindSuccess = (): void => {
-    // Update port if ephemeral (listen port is 0).
+  protected handleBindSuccess(): void {
+    // Update port if ephemeral (configured to listen on port 0).
     const addr = this.socket?.address();
     if (addr && typeof addr === "object") {
       this.port = addr.port;
@@ -294,19 +306,22 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     this.retryScheduler.reset();
 
     this.logger.info(
-      `The ${this.getArrowedName()} UDP server listening on ${this.address}:${this.port}`,
+      `The ${this.getArrowedName()} UDP server listening on <${this.address}:${this.port}>`,
     );
     this.emit(NetworkEvent.Listening);
-  };
+  }
 
   /**
    * Handles incoming messages (Runtime logic).
+   * Primaryly for subclass override to customize the message handling behaviors.
+   * Other classes which instantiate this class should attach their message processor
+   * to the emitted `NetworkEvent.Message` event from this instance.
    * Note: This is attached via .on(), so it persists after the Promise resolves.
    *
    * @param msg - The message buffer received.
    * @param rinfo - Remote information about the sender.
    */
-  private handleMessage = (msg: Buffer, rinfo: RemoteInfo): void => {
+  protected handleMessage(msg: Buffer, rinfo: RemoteInfo): void {
     if (!this.socket) return;
 
     const peer: NetworkPeer = {
@@ -324,13 +339,13 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     });
 
     this.emit(NetworkEvent.Message, { peer, data: msg });
-  };
+  }
 
   /**
    * Returns the name with "<>" of this listener.
    * Primary for logging and metric tagging.
    */
-  private getArrowedName(): string {
+  protected getArrowedName(): string {
     return `<${this.name}>`;
   }
 

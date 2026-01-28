@@ -12,6 +12,8 @@ import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { ExecutionMetrics } from "../metrics/exec-metrics";
 import { withExecutionTime } from "../aop/exec-time-interceptor";
+
+import { BroadcastUdpServer } from "../network/broadcast-udp-server";
 import { ServiceManager } from "../manager/service-manager";
 import { TcpServer } from "../network/tcp-server";
 import { UdpServer } from "../network/udp-server";
@@ -27,7 +29,7 @@ export const container = new Container();
 /**
  * Creates a new named TCP server instance.
  * Use this factory function to acquire TCP server instances with specific names.
- * 
+ *
  * @param name - Unique identifier for the server instance
  * @returns A new TcpServer instance with the given name
  * @example
@@ -45,18 +47,27 @@ export function createNamedTcpServer(name: string): TcpServer {
 /**
  * Creates a new named UDP server instance.
  * Use this factory function to acquire UDP server instances with specific names.
- * 
+ * For broadcast server, use name "broadcast" to get a BroadcastUdpServer.
+ *
  * @param name - Unique identifier for the server instance
- * @returns A new UdpServer instance with the given name
+ * @returns A new UdpServer instance with the given name, or BroadcastUdpServer if name is "broadcast"
  * @example
  * ```typescript
  * const udpServer = createNamedUdpServer("my-server");
  * await udpServer.start();
  * ```
  */
-export function createNamedUdpServer(name: string): UdpServer {
+export function createNamedUdpServer(
+  name: string,
+  type: Symbol,
+): UdpServer | BroadcastUdpServer {
   const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
   const loggerManager = container.get<LoggerManager>(TYPES.LoggerManager);
+
+  if (type === TYPES.BroadcastUdpServer) {
+    return new BroadcastUdpServer(configManager, loggerManager, name);
+  }
+
   return new UdpServer(configManager, loggerManager, name);
 }
 
@@ -69,10 +80,16 @@ function getContainer(): Container {
 }
 
 // Bind ConfigManager
-container.bind<ConfigManager>(TYPES.ConfigManager).to(ConfigManager).inSingletonScope();
+container
+  .bind<ConfigManager>(TYPES.ConfigManager)
+  .to(ConfigManager)
+  .inSingletonScope();
 
 // Bind LoggerManager with dependency on ConfigManager
-container.bind<LoggerManager>(TYPES.LoggerManager).to(LoggerManager).inSingletonScope();
+container
+  .bind<LoggerManager>(TYPES.LoggerManager)
+  .to(LoggerManager)
+  .inSingletonScope();
 
 // Bind Logger (retrieved from LoggerManager)
 container.bind<Logger>(TYPES.Logger).toDynamicValue((ctx) => {
@@ -83,6 +100,11 @@ container.bind<Logger>(TYPES.Logger).toDynamicValue((ctx) => {
 
 // Metrics singleton
 container.bind(ExecutionMetrics).toSelf().inSingletonScope();
+
+// Bind BroadcastUdpServer
+container
+  .bind<BroadcastUdpServer>(TYPES.BroadcastUdpServer)
+  .to(BroadcastUdpServer);
 
 // Bind TcpServer
 container.bind<TcpServer>(TYPES.TcpServer).to(TcpServer);

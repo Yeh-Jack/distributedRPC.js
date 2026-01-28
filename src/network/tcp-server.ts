@@ -50,7 +50,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
 
   private abortController!: AbortController;
   private retryScheduler!: RetryScheduler;
-  private server: Server | null = null;
+  private server: Server | undefined = undefined;
 
   private state: ServerState = ServerState.Stopped;
   private address!: string;
@@ -88,21 +88,29 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   // -------------------------------
 
   /**
-   * Returns the current server state.
-   *
-   * @returns The current ServerState (Stopped, Starting, Running, Listening, etc.).
-   */
-  public getState(): ServerState {
-    return this.state;
-  }
-
-  /**
    * Returns the port the server is listening on.
    *
    * @returns The port number (dynamically assigned if configured port is 0).
    */
   public getPort(): number {
     return this.port;
+  }
+
+  /**
+   * Get the listening TCP server.
+   * @returns Server
+   */
+  public getServer(): Server | undefined {
+    return this.server;
+  }
+
+  /**
+   * Returns the current server state.
+   *
+   * @returns The current ServerState (Stopped, Starting, Running, Listening, etc.).
+   */
+  public getState(): ServerState {
+    return this.state;
   }
 
   /**
@@ -217,6 +225,22 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     this.logger.info(`The ${this.getArrowedName()} TCP Server stopped.`);
   }
 
+  /**
+   * Handles incoming data (Runtime logic).
+   * Primaryly for subclass override to customize the incoming data handling behaviors.
+   * Other classes which instantiate this class should attach their message processor
+   * to the emitted `NetworkEvent.Data` event from this instance.
+   * Note: This is attached via .on(), so it persists after the Promise resolves.
+   */
+  protected handleData(
+    peer: NetworkPeer,
+    data: string,
+    connectionInfo: any,
+  ): void {
+    bytesCounter.add(data.length, connectionInfo);
+    this.emit(NetworkEvent.Data, { peer, data });
+  }
+
   // -------------------------------
   // Single attempt to listen
   // -------------------------------
@@ -317,9 +341,10 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     this.emit(NetworkEvent.Connection, { peer });
 
     socket.on(NetworkEvent.Data, (data) => {
-      bytesCounter.add(data.length, connectionInfo);
-      this.emit(NetworkEvent.Data, { peer, data });
-      socket.write(`Echo: ${data.toString()}`);
+      if (data.length > 0) {
+        // Call Function.apply() to force 'this' scope.
+        this.handleData.apply(this, [peer, data, connectionInfo]);
+      }
     });
 
     socket.on(NetworkEvent.Close, (hadError) => {

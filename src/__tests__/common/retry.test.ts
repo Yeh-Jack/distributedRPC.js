@@ -294,13 +294,13 @@ describe("abort-aware full coverage", () => {
 
   it("sleep aborts", async () => {
     vi.useFakeTimers();
-    
+
     const ac = new AbortController();
     ac.abort();
-    
+
     // Verify abort state
     expect(ac.signal.aborted).toBe(true);
-    
+
     // With fake timers, we can't properly test the abort scenario
     // because setTimeout is mocked. The synchronous rejection path
     // should still work, but we skip this test for now.

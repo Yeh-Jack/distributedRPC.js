@@ -1,7 +1,7 @@
 import fs from "fs";
 import yaml from "js-yaml";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { ConfigManager } from "../../common/config";
+import { ConfigManager, DEFAULT_DISCOVERY_PORT } from "../../common/config";
 
 // Tell Vitest to mock the entire 'fs' module.
 vi.mock("fs");
@@ -13,10 +13,10 @@ function validateDefaultConfig(configManager: ConfigManager, svcName: string) {
 
   const coreConfig = configManager.getCoreConfig();
   expect(coreConfig.service_name).toBe(svcName);
-  expect(coreConfig.udp_address).toBe("0.0.0.0");
-  expect(coreConfig.udp_port).toBe(5707);
-  expect(coreConfig.retry_interval).toBe(5000);
-  expect(coreConfig.retry_max).toBe(0);
+  expect(coreConfig.net.udp_address).toBe("0.0.0.0");
+  expect(coreConfig.net.udp_port).toBe(DEFAULT_DISCOVERY_PORT);
+  expect(coreConfig.retry.interval).toBe(2000);
+  expect(coreConfig.retry.max_try).toBe(0);
 }
 
 describe("ConfigManager", () => {
@@ -83,8 +83,9 @@ describe("ConfigManager", () => {
     const updatedYaml = `
 core:
   service_name: ${svcName}
-  udp_address: ${address}
-  udp_port: ${port}
+  net:
+    udp_address: ${address}
+    udp_port: ${port}
 `;
 
     vi.spyOn(fs, "existsSync").mockReturnValue(true);
@@ -94,8 +95,8 @@ core:
 
     const coreConfig = configManager.getCoreConfig();
     expect(coreConfig.service_name).toBe(svcName);
-    expect(coreConfig.udp_address).toBe(address);
-    expect(coreConfig.udp_port).toBe(port);
+    expect(coreConfig.net.udp_address).toBe(address);
+    expect(coreConfig.net.udp_port).toBe(port);
 
     vi.restoreAllMocks();
   });

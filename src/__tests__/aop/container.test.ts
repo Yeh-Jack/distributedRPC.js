@@ -3,7 +3,7 @@ import { Container } from "inversify";
 import { Logger } from "winston";
 import { TcpServer } from "../../network/tcp-server";
 import { UdpServer } from "../../network/udp-server";
-import { ConfigManager } from "../../common/config";
+import { ConfigManager, DEFAULT_DISCOVERY_PORT } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
 import { ExecutionMetrics } from "../../metrics/exec-metrics";
 import { ServiceManager } from "../../manager/service-manager";
@@ -105,7 +105,7 @@ describe("container", () => {
       const mockConfigManager = {
         getCoreConfig: () => ({
           udp_address: "127.0.0.1",
-          udp_port: 5707,
+          udp_port: DEFAULT_DISCOVERY_PORT,
           retry_interval: 10,
           retry_max: 2,
           service_name: "test-service",
@@ -135,7 +135,7 @@ describe("container", () => {
       const mockConfigManager = {
         getCoreConfig: () => ({
           udp_address: "127.0.0.1",
-          udp_port: 5707,
+          udp_port: DEFAULT_DISCOVERY_PORT,
           retry_interval: 10,
           retry_max: 2,
           service_name: "test-service",

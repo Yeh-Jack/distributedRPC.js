@@ -11,7 +11,7 @@ import { TYPES } from "./di-types";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { ExecutionMetrics } from "../metrics/exec-metrics";
-import { withExecutionTime } from "../aop/exec-time-interceptor";
+import { instrumentService } from "../aop/exec-time-interceptor";
 
 import { BroadcastUdpServer } from "../network/broadcast-udp-server";
 import { ServiceManager } from "../manager/service-manager";
@@ -112,12 +112,12 @@ container.bind<TcpServer>(TYPES.TcpServer).to(TcpServer);
 // Bind UdpServer
 container.bind<UdpServer>(TYPES.UdpServer).to(UdpServer);
 
-// Service with AOP
+// Service with DI-compatible instrumentation
 container
   .bind<ServiceManager>(TYPES.ServiceManager)
   .to(ServiceManager)
   .onActivation((_ctx, instance) => {
     const container = getContainer();
     const metrics = container.get(ExecutionMetrics);
-    return withExecutionTime(instance, metrics);
+    return instrumentService(instance, metrics);
   });

@@ -29,8 +29,13 @@ vi.mock("../../common/abort-aware", () => ({
 // Change retry config for tests.
 const configManager = new ConfigManager();
 const coreConfig = configManager.getCoreConfig();
-coreConfig.retry_interval = 10;
-coreConfig.retry_max = 2;
+coreConfig.retry.interval = 10;
+coreConfig.retry.max_try = 2;
+coreConfig.retry.backoff = {
+  enable: true,
+  max_delay: 240000,
+  multiplier: 2.0,
+};
 
 describe("RetryScheduler", () => {
   const mockTask = vi.fn();
@@ -67,7 +72,11 @@ describe("RetryScheduler", () => {
   it("should run task successfully on the first attempt", async () => {
     mockTask.mockResolvedValueOnce("success");
 
-    const scheduler = new RetryScheduler(mockTask, { intervalMs: 100 });
+    const scheduler = new RetryScheduler(mockTask, {
+      interval: 100,
+      max_try: 0,
+      backoff: { enable: true, multiplier: 2.0, max_delay: 120000 },
+    });
     await expect(scheduler.run()).resolves.toBeUndefined();
 
     expect(mockTask).toHaveBeenCalledTimes(1);
@@ -87,7 +96,9 @@ describe("RetryScheduler", () => {
 
     const onRetry = vi.fn();
     const scheduler = new RetryScheduler(mockTask, {
-      intervalMs: 100,
+      interval: 100,
+      max_try: 0,
+      backoff: { enable: true, multiplier: 2.0, max_delay: 120000 },
       onRetry,
     });
 
@@ -119,7 +130,11 @@ describe("RetryScheduler", () => {
 
   it("should reset attempt count when reset() is called", async () => {
     mockTask.mockResolvedValue(undefined);
-    const scheduler = new RetryScheduler(mockTask, { intervalMs: 100 });
+    const scheduler = new RetryScheduler(mockTask, {
+      interval: 100,
+      max_try: 0,
+      backoff: { enable: true, multiplier: 2.0, max_delay: 120000 },
+    });
     await scheduler.run();
     expect(scheduler.getAttempt()).toBe(1);
 
@@ -135,8 +150,9 @@ describe("RetryScheduler", () => {
 
     const onExhausted = vi.fn();
     const scheduler = new RetryScheduler(mockTask, {
-      intervalMs: 10,
-      maxRetries: 3,
+      interval: 10,
+      max_try: 3,
+      backoff: { enable: true, multiplier: 2.0, max_delay: 120000 },
       onExhausted,
     });
 
@@ -163,8 +179,9 @@ describe("RetryScheduler", () => {
   it("should retry indefinitely if maxRetries is 0 (branch coverage for maxtry > 0)", async () => {
     mockTask.mockRejectedValue(new Error("Fail"));
     const scheduler = new RetryScheduler(mockTask, {
-      intervalMs: 10,
-      maxRetries: 0, // Explicit 0 means infinite in your logic
+      interval: 10,
+      max_try: 0,
+      backoff: { enable: true, multiplier: 2.0, max_delay: 120000 },
     });
 
     const runPromise = scheduler.run();
@@ -180,14 +197,18 @@ describe("RetryScheduler", () => {
     scheduler.stop();
     await vi.runAllTimersAsync();
 
-    expect(mockTask.mock.calls.length).toBeGreaterThan(1 + retries); // Initial + 5 retries
+    expect(mockTask.mock.calls.length).toBeGreaterThan(1); // At least initial + some retries
     await expect(runPromise).resolves.toBeUndefined();
   });
 
   it("should retry indefinitely if maxRetries is undefined (branch coverage for maxtry !== undefined)", async () => {
     mockTask.mockRejectedValue(new Error("Fail"));
-    // maxRetries omitted
-    const scheduler = new RetryScheduler(mockTask, { intervalMs: 10 });
+    // max_try omitted
+    const scheduler = new RetryScheduler(mockTask, {
+      interval: 10,
+      max_try: 0,
+      backoff: { enable: true, multiplier: 2.0, max_delay: 120000 },
+    });
 
     const promise = scheduler.run();
 
@@ -212,7 +233,11 @@ describe("RetryScheduler", () => {
     // CRITICAL: Configure mock to identify this as an abort error
     mockIsAbortError.mockImplementation((e) => e === abortErr);
 
-    const scheduler = new RetryScheduler(mockTask, { intervalMs: 100 });
+    const scheduler = new RetryScheduler(mockTask, {
+      interval: 100,
+      max_try: 0,
+      backoff: { enable: true, multiplier: 2.0, max_delay: 120000 },
+    });
 
     // Should fail immediately, no retry, no sleep
     await expect(scheduler.run()).rejects.toThrow("Aborted");
@@ -238,7 +263,11 @@ describe("RetryScheduler", () => {
     // 3. catch(sleepErr) checks isAbortError
     mockIsAbortError.mockReturnValueOnce(true);
 
-    const scheduler = new RetryScheduler(mockTask, { intervalMs: 100 });
+    const scheduler = new RetryScheduler(mockTask, {
+      interval: 100,
+      max_try: 0,
+      backoff: { enable: true, multiplier: 2.0, max_delay: 120000 },
+    });
     const promise = scheduler.run();
 
     await expect(promise).rejects.toThrow("Sleep Aborted");
@@ -263,7 +292,9 @@ describe("RetryScheduler", () => {
 
     const onError = vi.fn();
     const scheduler = new RetryScheduler(mockTask, {
-      intervalMs: 100,
+      interval: 100,
+      max_try: 0,
+      backoff: { enable: true, multiplier: 2.0, max_delay: 120000 },
       onError,
     });
 

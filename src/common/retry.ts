@@ -5,6 +5,7 @@
 
 import { isAbortError, sleep } from "./abort-aware";
 import { retryAttempts, retryDuration } from "../metrics/otel-metrics";
+import { RetryConfig, DEFAULT_RETRY_MULTIPLIER } from "./config";
 
 /**
  * Context object passed to retry callbacks containing attempt information.
@@ -19,13 +20,9 @@ export interface RetryContext {
 }
 
 /**
- * Configuration options for RetryScheduler.
+ * Configuration options for RetryScheduler that extends RetryConfig with event listeners.
  */
-export interface RetrySchedulerOptions {
-  /** Base interval between retry attempts in milliseconds. */
-  intervalMs: number;
-  /** Maximum number of retries. undefined or 0 means infinite retries. */
-  maxRetries?: number;
+export interface RetrySchedulerOptions extends RetryConfig {
   /** Optional AbortSignal to cancel the retry scheduler. */
   signal?: AbortSignal;
   /** Callback invoked before each retry attempt. */
@@ -37,30 +34,54 @@ export interface RetrySchedulerOptions {
 }
 
 /**
- * Scheduler for retrying failed async operations with configurable backoff.
+ * Production-grade retry scheduler with exponential backoff and observability.
  *
- * Supports:
- * - Configurable retry intervals and maximum attempts
- * - AbortSignal integration for cancellation
- * - OpenTelemetry metrics integration
- * - Callback hooks for retry lifecycle events
+ * This class implements a sophisticated retry mechanism for asynchronous operations
+ * that may fail intermittently. It provides exponential backoff to prevent
+ * overwhelming failing services while maintaining resilience through configurable
+ * retry policies and comprehensive observability integration.
+ *
+ * Key Features:
+ * - Exponential backoff with configurable multiplier and maximum delay
+ * - AbortSignal integration for graceful cancellation
+ * - OpenTelemetry metrics for retry tracking
+ * - Lifecycle callbacks for retry events
+ * - Infinite retry support (maxRetries = 0 or undefined)
+ * - Thread-safe operation tracking
+ *
+ * @remarks
+ * RetryScheduler is designed for production use where reliable operation retry
+ * is critical. The exponential backoff prevents system overload while the
+ * observability integration provides insight into retry patterns and system health.
  *
  * @example
  * ```typescript
+ * // Basic usage with exponential backoff
  * const scheduler = new RetryScheduler(
  *   async () => {
  *     await connectToService();
  *   },
  *   {
- *     intervalMs: 1000,
+ *     intervalMs: 1000,           // Base delay: 1 second
+ *     backoffMultiplier: 2.0,     // Double delay each attempt
+ *     maxDelayMs: 120000,          // Cap at 120 seconds
  *     maxRetries: 5,
- *     onRetry: (ctx) => console.log(`Retry attempt ${ctx.attempt}`),
- *     onExhausted: (ctx) => console.error("Max retries reached", ctx.error),
+ *     onRetry: (ctx) => logger.warn(`Retry attempt ${ctx.attempt}`, { error: ctx.error }),
+ *     onExhausted: (ctx) => logger.error("Max retries reached", { error: ctx.error }),
  *   }
  * );
  *
  * await scheduler.run();
- * scheduler.stop();
+ *
+ * // With AbortSignal for cancellation
+ * const controller = new AbortController();
+ * const abortableScheduler = new RetryScheduler(task, {
+ *   intervalMs: 1000,
+ *   signal: controller.signal,
+ * });
+ *
+ * // Cancel after 10 seconds
+ * setTimeout(() => controller.abort(), 10000);
  * ```
  */
 export class RetryScheduler {
@@ -71,12 +92,12 @@ export class RetryScheduler {
   /**
    * Creates a new RetryScheduler instance.
    *
-   * @param task - The async function to execute and potentially retry.
-   * @param options - Configuration options for retry behavior.
+   * @param _task - The async function to execute and potentially retry.
+   * @param _options - Configuration options for retry behavior.
    */
   constructor(
-    private readonly task: () => Promise<void>,
-    private readonly options: RetrySchedulerOptions,
+    private readonly _task: () => Promise<void>,
+    private readonly _options: RetrySchedulerOptions,
   ) {}
 
   /**
@@ -107,7 +128,7 @@ export class RetryScheduler {
     while (!this._stopped) {
       try {
         this._attempt++;
-        await this.task();
+        await this._task();
         return; // Success.
       } catch (err) {
         // Record retry metrics for OpenTelemetry.
@@ -124,12 +145,28 @@ export class RetryScheduler {
         };
 
         if (this._isExhausted()) {
-          this.options.onExhausted?.(ctx);
+          this._options.onExhausted?.(ctx);
           throw err;
         }
 
-        this.options.onRetry?.(ctx);
-        await this._waitWithAbort(err);
+        this._options.onRetry?.(ctx);
+
+        // Calculate exponential backoff delay
+        const baseDelay = this._options.interval;
+        let delay = baseDelay;
+        if (this._options.backoff.enable) {
+          const maxDelay = this._options.backoff.max_delay;
+          let multiplier = this._options.backoff.multiplier;
+          if (multiplier < 1) multiplier = DEFAULT_RETRY_MULTIPLIER; // Set to default if it's an illegal number.
+
+          const exponentialDelay = Math.min(
+            baseDelay * Math.pow(multiplier, this._attempt - 1),
+            maxDelay,
+          );
+          delay = exponentialDelay;
+        }
+
+        await this._waitWithAbort(err, delay);
       } finally {
         // Record retry duration metrics for OpenTelemetry.
         retryDuration.record(Date.now() - this._startTime, {
@@ -152,22 +189,23 @@ export class RetryScheduler {
   // --------------------------------------------
 
   private _isExhausted(): boolean {
-    const maxtry = this.options.maxRetries;
+    const maxtry = this._options.max_try;
     return (
       maxtry !== undefined &&
-      maxtry > 0 && // Infinity retry if maxRetries is 0.
+      maxtry > 0 && // Infinity retry if max_try is 0.
       this._attempt >= maxtry
     );
   }
 
-  private async _waitWithAbort(err: any): Promise<void> {
+  private async _waitWithAbort(err: any, delayMs?: number): Promise<void> {
     try {
-      await sleep(this.options.intervalMs, this.options.signal);
+      const sleepDuration = delayMs ?? this._options.interval;
+      await sleep(sleepDuration, this._options.signal);
     } catch (sleepErr) {
       if (isAbortError(sleepErr)) {
         throw sleepErr; // Cancellation is not a failure.
       }
-      this.options.onError?.(err);
+      this._options.onError?.(err);
     }
   }
 }

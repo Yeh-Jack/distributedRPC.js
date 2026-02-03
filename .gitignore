@@ -130,6 +130,10 @@ docs/
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
 
+# Presentation related.
+presentation
+venv
+
 # yarn v3
 .pnp.*
 .yarn/*

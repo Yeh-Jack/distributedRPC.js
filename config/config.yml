@@ -5,16 +5,22 @@ app:
   otel_traces_port: 4317
 
 # core:
-#   retry_interval: 5000
-#   retry_max: 0
 #   service_name: ServiceManager
-#   tcp_address: 0.0.0.0
-#   tcp_port: 2736
-#   udp_address: 0.0.0.0
-#   udp_port: 5707
+#   net:
+#     tcp_address: 0.0.0.0
+#     tcp_port: 0
+#     udp_address: 0.0.0.0
+#     udp_port: 5707
+#   retry:
+#     backoff:
+#       enable: false
+#       max_delay: 240000
+#       multiplier: 2
+#     interval: 2000
+#     max_try: 0
 
 log:
   log_level: debug
-#   format: json
+#   format: console
 #   max_files: 14d
 #   max_size: 20m

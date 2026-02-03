@@ -5,6 +5,41 @@ import { ConfigManager } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
 import { ServerState } from "../../types/basal-protocol";
 
+// Mock otel-tracing to avoid OpenTelemetry context issues in tests
+vi.mock("../../metrics/otel-tracing", () => ({
+  generateCorrelationId: () => "test-correlation-id",
+  OtelTracing: {
+    createBroadcastSpan: () => ({
+      setStatus: vi.fn(),
+      end: vi.fn(),
+      recordException: vi.fn(),
+    }),
+    recordException: vi.fn(),
+  },
+}));
+
+// Mock otel-metrics to avoid metric collection issues in tests
+vi.mock("../../metrics/otel-metrics", () => ({
+  udpBroadcastRequests: {
+    add: vi.fn(),
+  },
+  udpBroadcastResponses: {
+    add: vi.fn(),
+  },
+  udpBroadcastLatency: {
+    record: vi.fn(),
+  },
+  retryDuration: {
+    record: vi.fn(),
+  },
+  retryAttempts: {
+    add: vi.fn(),
+  },
+  bytesCounter: {
+    add: vi.fn(),
+  },
+}));
+
 describe("BroadcastUdpServer", () => {
   let server: BroadcastUdpServer;
   let mockConfigManager: ConfigManager;
@@ -16,12 +51,20 @@ describe("BroadcastUdpServer", () => {
 
     mockConfigManager = {
       getCoreConfig: () => ({
-        tcp_address: "127.0.0.1",
-        tcp_port: 0,
-        udp_address: "127.0.0.1",
-        udp_port: 0,
-        retry_interval: 10,
-        retry_max: 2,
+        net: {
+          tcp_address: "127.0.0.1",
+          tcp_port: 0,
+          udp_address: "127.0.0.1",
+          udp_port: 0,
+        },
+        retry: {
+          interval: 10,
+          max_try: 2,
+          backoff: { enable: true,
+            max_delay: 240000,
+            multiplier: 1.5,
+          },
+        },
         service_name: "test-broadcast",
       }),
     } as unknown as ConfigManager;
@@ -75,7 +118,7 @@ describe("BroadcastUdpServer", () => {
       };
 
       server.setManagerInfo(mockInfo);
-      expect((server as any).managerInfo).toBe(mockInfo);
+      expect((server as any)._managerInfo).toBe(mockInfo);
     });
   });
 
@@ -96,7 +139,7 @@ describe("BroadcastUdpServer", () => {
       server.setManagerInfo(mockInfo);
       await server.stop();
 
-      expect((server as any).managerInfo).toBeUndefined();
+      expect((server as any)._managerInfo).toBeUndefined();
     });
   });
 
@@ -107,8 +150,8 @@ describe("BroadcastUdpServer", () => {
       };
 
       // Mock socket and state
-      (server as any).socket = mockSocket;
-      (server as any).state = ServerState.Listening;
+      (server as any)._socket = mockSocket;
+      (server as any)._state = ServerState.Listening;
 
       const mockInfo = {
         manager: {} as any,
@@ -116,15 +159,15 @@ describe("BroadcastUdpServer", () => {
 
       server.setManagerInfo(mockInfo);
 
-      // Call with non-probe message
-      expect(() => {
-        server["handleMessage"](Buffer.from("not-a-probe-message"), {
-          address: "127.0.0.1",
-          port: 54321,
-          family: "IPv4",
-          size: 20,
-        });
-      }).not.toThrow();
+      // Call with non-probe message - should not call send
+      (server as any)["handleMessage"](Buffer.from("Hello"), {
+        address: "127.0.0.1",
+        port: 54321,
+        family: "IPv4",
+        size: 20,
+      });
+
+      expect(mockSocket.send).not.toHaveBeenCalled();
     });
 
     it("should handle valid probe messages correctly", () => {
@@ -133,8 +176,8 @@ describe("BroadcastUdpServer", () => {
       };
 
       // Mock socket and state
-      (server as any).socket = mockSocket;
-      (server as any).state = ServerState.Listening;
+      (server as any)._socket = mockSocket;
+      (server as any)._state = ServerState.Listening;
 
       const mockInfo = {
         manager: {} as any,
@@ -155,7 +198,7 @@ describe("BroadcastUdpServer", () => {
 
     it("should log error when trying to respond without a socket", () => {
       // Mock state but no socket
-      (server as any).state = ServerState.Listening;
+      (server as any)._state = ServerState.Listening;
 
       const mockInfo = {
         manager: {} as any,
@@ -179,8 +222,8 @@ describe("BroadcastUdpServer", () => {
         send: vi.fn(),
       };
 
-      (server as any).socket = mockSocket;
-      (server as any).state = ServerState.Stopped; // Not listening
+      (server as any)._socket = mockSocket;
+      (server as any)._state = ServerState.Stopped; // Not listening
 
       const mockInfo = {
         manager: {} as any,

@@ -1,7 +1,7 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/typescript-node
 {
-  "name": "Node22 & TS, JDK21, Python3",
+  "name": "Node22+TS,JDK21,Python3",
   // "build": {
   // 	"dockerfile": "Dockerfile",
   // 	"imageName": "reg.enjo.tech/dev-container/vsc-tsnode:22-bookworm-amd64",

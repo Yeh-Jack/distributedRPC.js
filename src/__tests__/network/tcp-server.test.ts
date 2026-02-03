@@ -3,11 +3,48 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NetworkEvent } from "../../network/network-events";
 import { ServerState } from "../../types/basal-protocol";
 import { TcpServer } from "../../network/tcp-server";
-import { ConfigManager } from "../../common/config";
+import { ConfigManager, DEFAULT_DISCOVERY_PORT } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
 import { sleep } from "../../common/abort-aware";
 
 vi.mock("net");
+
+// Mock otel-tracing to avoid OpenTelemetry context issues in tests
+vi.mock("../../metrics/otel-tracing", () => ({
+  generateCorrelationId: () => "test-correlation-id",
+  OtelTracing: {
+    createNetworkSpan: () => ({
+      setStatus: vi.fn(),
+      end: vi.fn(),
+    }),
+    recordException: vi.fn(),
+  },
+}));
+
+// Mock otel-metrics to avoid metric collection issues in tests
+vi.mock("../../metrics/otel-metrics", () => ({
+  activeConnections: {
+    add: vi.fn(),
+  },
+  bytesCounter: {
+    add: vi.fn(),
+  },
+  tcpConnectionDuration: {
+    record: vi.fn(),
+  },
+  tcpConnectionsFailed: {
+    add: vi.fn(),
+  },
+  tcpDataTransferSize: {
+    record: vi.fn(),
+  },
+  retryDuration: {
+    record: vi.fn(),
+  },
+  retryAttempts: {
+    add: vi.fn(),
+  },
+}));
 
 describe("TcpServer full coverage", () => {
   let tcpServer: TcpServer;
@@ -61,10 +98,17 @@ describe("TcpServer full coverage", () => {
 
     const mockConfigManager = {
       getCoreConfig: () => ({
-        tcp_address: "127.0.0.1",
-        tcp_port: 0,
-        retry_interval: retryInterval,
-        retry_max: 2,
+        net: {
+          tcp_address: "127.0.0.1",
+          tcp_port: 0,
+          udp_address: "127.0.0.1",
+          udp_port: DEFAULT_DISCOVERY_PORT,
+        },
+        retry: {
+          interval: retryInterval,
+          max_try: 2,
+          backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
+        },
         service_name: "test-tcp",
       }),
     } as unknown as ConfigManager;
@@ -117,7 +161,7 @@ describe("TcpServer full coverage", () => {
 
     await new Promise((r) => setTimeout(r, 0));
 
-    (tcpServer as any).abortController.abort();
+    (tcpServer as any)._abortController.abort();
     serverEvents[NetworkEvent.Close]?.();
 
     await expect(startPromise).resolves.toBeUndefined();
@@ -173,7 +217,7 @@ describe("TcpServer full coverage", () => {
     const spyData = vi.fn();
     tcpServer.on(NetworkEvent.Data, spyData);
 
-    (tcpServer as any).handleConnection(mockSocket);
+    (tcpServer as any)._handleConnection(mockSocket);
 
     socketEvents[NetworkEvent.Data](Buffer.from("hi"));
     expect(spyData).toHaveBeenCalled();
@@ -245,7 +289,7 @@ describe("TcpServer full coverage", () => {
   it("should abort attemptListen immediately if server is stopped", async () => {
     expect(tcpServer.getState()).toBe(ServerState.Stopped);
 
-    const promise = (tcpServer as any).attemptListen();
+    const promise = (tcpServer as any)._attemptListen();
 
     await expect(promise).rejects.toThrow("Aborted");
   });
@@ -283,8 +327,8 @@ describe("TcpServer full coverage", () => {
     const socket1 = createMockSocket();
     const socket2 = createMockSocket();
 
-    (tcpServer as any).handleConnection(socket1);
-    (tcpServer as any).handleConnection(socket2);
+    (tcpServer as any)._handleConnection(socket1);
+    (tcpServer as any)._handleConnection(socket2);
 
     await tcpServer.stop();
 
@@ -299,7 +343,7 @@ describe("TcpServer full coverage", () => {
     await startPromise;
 
     const socket = createMockSocket();
-    (tcpServer as any).handleConnection(socket);
+    (tcpServer as any)._handleConnection(socket);
 
     const closeListener = socketEvents["close"];
     if (closeListener) {
@@ -322,7 +366,7 @@ describe("TcpServer full coverage", () => {
       destroyed: false,
     };
 
-    (tcpServer as any).handleConnection(aliveSocket);
+    (tcpServer as any)._handleConnection(aliveSocket);
 
     const boom = new Error("boom");
     socketEvents[NetworkEvent.Error](boom);
@@ -342,7 +386,7 @@ describe("TcpServer full coverage", () => {
       destroyed: true,
     };
 
-    (tcpServer as any).handleConnection(destroyedSocket);
+    (tcpServer as any)._handleConnection(destroyedSocket);
 
     const boom = new Error("boom");
     socketEvents[NetworkEvent.Error](boom);
@@ -356,10 +400,17 @@ describe("TcpServer full coverage", () => {
   it("should accept custom name parameter", () => {
     const localMockConfigManager = {
       getCoreConfig: () => ({
-        tcp_address: "127.0.0.1",
-        tcp_port: 0,
-        retry_interval: retryInterval,
-        retry_max: 2,
+        net: {
+          tcp_address: "127.0.0.1",
+          tcp_port: 0,
+          udp_address: "127.0.0.1",
+          udp_port: DEFAULT_DISCOVERY_PORT,
+        },
+        retry: {
+          interval: retryInterval,
+          max_try: 2,
+          backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
+        },
         service_name: "test-tcp",
       }),
     } as unknown as ConfigManager;
@@ -379,10 +430,17 @@ describe("TcpServer full coverage", () => {
   it("should use default name when not provided", () => {
     const localMockConfigManager = {
       getCoreConfig: () => ({
-        tcp_address: "127.0.0.1",
-        tcp_port: 0,
-        retry_interval: retryInterval,
-        retry_max: 2,
+        net: {
+          tcp_address: "127.0.0.1",
+          tcp_port: 0,
+          udp_address: "127.0.0.1",
+          udp_port: DEFAULT_DISCOVERY_PORT,
+        },
+        retry: {
+          interval: retryInterval,
+          max_try: 2,
+          backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
+        },
         service_name: "test-tcp",
       }),
     } as unknown as ConfigManager;

@@ -5,6 +5,9 @@ import { inject, injectable } from "inversify";
 import { LogFormat } from "./logger";
 import { AppEnv, getAppEnv, UNKNOWN_ATTRIBUTE } from "../types/basal-protocol";
 
+export const DEFAULT_DISCOVERY_PORT = 5707;
+export const DEFAULT_RETRY_MULTIPLIER = 2;
+
 /**
  * Represents the configuration options for the application.
  * Extend this interface to define specific configuration properties
@@ -15,22 +18,22 @@ export interface AppConfig {}
 /**
  * Configuration options for the core distributed RPC service.
  *
- * @property retry_interval - Network retry interval in milliseconds. Defaults to 5000 ms.
- * @property retry_max - Maximum number of retry attempts. Defaults to 0, which means infinite retries.
+ * @property net.tcp_address - TCP binding address. Defaults to "0.0.0.0".
+ * @property net.tcp_port - TCP listening port. Defaults to 0 which finds a random available port.
+ * @property net.udp_address - UDP binding address. Defaults to "0.0.0.0".
+ * @property net.udp_port - UDP listening port. Defaults to 5707 for discovering ServiceManager.
+ * @property retry - Retry configurations.
  * @property service_name - Name of the service. Preferably without spaces.
- * @property tcp_address - TCP binding address. Defaults to "0.0.0.0".
- * @property tcp_port - TCP listening port. Defaults to 0 which finds a random available port.
- * @property udp_address - UDP binding address. Defaults to "0.0.0.0".
- * @property udp_port - UDP listening port. Defaults to 5707.
  */
 export interface CoreConfig {
-  retry_interval: number;
-  retry_max: number;
+  net: {
+    tcp_address: string;
+    tcp_port: number;
+    udp_address: string;
+    udp_port: number;
+  };
+  retry: RetryConfig;
   service_name: string;
-  tcp_address: string;
-  tcp_port: number;
-  udp_address: string;
-  udp_port: number;
 }
 
 /**
@@ -46,6 +49,25 @@ export interface LogConfig {
   log_level: string;
   max_files: string;
   max_size: string;
+}
+
+/**
+ * Configuration options for retry jobs.
+ *
+ * @property backoff.enable - Enable retry backoff or not. Defaults to false.
+ * @property backoff.max_delay - Max delay of retry interval. Defaults to 4 minutes.
+ * @property backoff.multiplier - Multiplier for increase retry interval. Must be greater than 1, defaults to 2.
+ * @property interval - Retry interval in milliseconds. Defaults to 2000 ms.
+ * @property max_try - Maximum retry attempts. Defaults to 0 which means infinite retries.
+ */
+export interface RetryConfig {
+  backoff: {
+    enable: boolean;
+    max_delay: number;
+    multiplier: number;
+  };
+  interval: number;
+  max_try?: number;
 }
 
 /**
@@ -68,23 +90,53 @@ export interface ProviderConfig<
 }
 
 /**
- * Manages application, core and logging configuration settings, supporting loading from YAML files,
- * providing default values, and dependency injection. This generic class is intended to be
- * extended for specific application and core configuration types.
+ * Centralized configuration management for distributed RPC applications.
  *
- * @typeParam T_App - The type representing the application-specific configuration.
- * @typeParam T_Core - The type representing the core configuration.
+ * This generic class provides a robust configuration management system that loads,
+ * validates, and provides access to application configuration from YAML files with
+ * automatic fallback to sensible defaults. It's designed to work seamlessly with
+ * dependency injection and supports type-safe configuration access.
+ *
+ * Key Features:
+ * - YAML file loading with automatic search paths (config.yml, config/config.yml)
+ * - Type-safe generic configuration with TypeScript
+ * - Automatic default value fallback for missing configuration
+ * - Dependency injection support via InversifyJS
+ * - Environment-aware configuration detection
+ *
+ * @typeParam T_App - The application-specific configuration type extending AppConfig.
+ * @typeParam T_Core - The core system configuration type extending CoreConfig.
  *
  * @remarks
- * - Loads configuration from `config.yml` in the working directory or `config/config.yml`.
- * - Falls back to default values if the configuration file is missing or invalid.
- * - Supports dependency injection via InversifyJS; subclasses should override for type safety.
+ * Subclasses should extend this class to provide type-specific configuration accessors
+ * while maintaining type safety. The class automatically handles configuration loading
+ * during construction and provides getters for accessing configuration values.
  *
  * @example
  * ```typescript
+ * // Extend for type-safe configuration access
  * @injectable()
- * class MyConfigManager extends ConfigManager<MyAppConfig, MyCoreConfig> {
- *   // Custom implementation...
+ * class OrderServiceConfig extends ConfigManager<AppConfig, CoreConfig> {
+ *   getServiceName(): string {
+ *     return this.getConfig().core.service_name;
+ *   }
+ *
+ *   getTcpPort(): number {
+ *     return this.getConfig().core.net.tcp_port;
+ *   }
+ * }
+ *
+ * // Use in services
+ * @injectable()
+ * class OrderService {
+ *   constructor(
+ *     @inject(TYPES.ConfigManager) private config: OrderServiceConfig
+ *   ) {}
+ *
+ *   async start() {
+ *     const port = this.config.getTcpPort();
+ *     // Start service on configured port
+ *   }
  * }
  * ```
  */
@@ -154,14 +206,23 @@ export class ConfigManager<
 
   protected getDefaultCoreConfig(): T_Core {
     const NIC_ADDRESS = "0.0.0.0";
+    const SECOND = 1000;
     return {
-      retry_interval: 5000,
-      retry_max: 0,
+      net: {
+        tcp_address: NIC_ADDRESS,
+        tcp_port: 0,
+        udp_address: NIC_ADDRESS,
+        udp_port: DEFAULT_DISCOVERY_PORT,
+      },
+      retry: {
+        interval: 2 * SECOND,
+        max_try: 0,
+        backoff: {
+          max_delay: 4 * 60 * SECOND, // 4 minutes.
+          multiplier: DEFAULT_RETRY_MULTIPLIER,
+        },
+      },
       service_name: UNKNOWN_ATTRIBUTE,
-      tcp_address: NIC_ADDRESS,
-      tcp_port: 0,
-      udp_address: NIC_ADDRESS,
-      udp_port: 5707,
     } as T_Core;
   }
 

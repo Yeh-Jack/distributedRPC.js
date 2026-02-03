@@ -6,25 +6,63 @@
 import { EventEmitter } from "events";
 
 /**
- * EventEmitter with type-safe event handling.
+ * Strongly-typed event emitter for type-safe event-driven architectures.
  *
- * Extends Node's EventEmitter with TypeScript generics to ensure
- * event listeners receive correctly typed arguments.
+ * TypedEventEmitter extends Node.js EventEmitter with TypeScript generics to provide
+ * compile-time type safety for event registration, listening, and emission. It ensures
+ * that event handlers receive correctly typed arguments and prevents runtime errors
+ * from incorrect event usage.
+ *
+ * Key Features:
+ * - Compile-time type checking for event names and arguments
+ * - Full EventEmitter API compatibility
+ * - Generic event map support
+ * - Type-safe on(), once(), and emit() methods
+ * - IntelliSense support for event names
  *
  * @typeParam Events - Event map interface defining event names and their callback signatures.
+ *                    Each property key is an event name, and the value is the callback signature.
+ *
+ * @remarks
+ * This class is fundamental to the event-driven architecture of the distributed RPC
+ * system. It provides type safety while maintaining the flexibility and performance
+ * of Node.js EventEmitter.
+ *
  * @example
  * ```typescript
- * interface MyEvents {
- *   data: (payload: { id: number; value: string }) => void;
- *   error: (err: Error) => void;
- *   complete: () => void;
+ * // Define event signatures
+ * interface NetworkEvents {
+ *   connection: (peer: { address: string; port: number }) => void;
+ *   data: (payload: Buffer) => void;
+ *   error: (error: Error) => void;
+ *   close: () => void;
  * }
  *
- * class MyService extends TypedEventEmitter<MyEvents> {
- *   emitData(id: number, value: string) {
- *     this.emit("data", { id, value }); // Type-checked
+ * // Use in network servers
+ * class TcpServer extends TypedEventEmitter<NetworkEvents> {
+ *   handleConnection(socket: Socket) {
+ *     // Type-checked event emission
+ *     this.emit("connection", {
+ *       address: socket.remoteAddress,
+ *       port: socket.remotePort
+ *     });
+ *   }
+ *
+ *   receiveData(data: Buffer) {
+ *     this.emit("data", data); // Type-checked
  *   }
  * }
+ *
+ * // Type-safe event listeners
+ * const server = new TcpServer();
+ *
+ * server.on("connection", ({ address, port }) => {
+ *   console.log(`Connection from ${address}:${port}`);
+ * }); // Type-checked: parameter types verified
+ *
+ * server.on("data", (payload) => {
+ *   console.log("Received:", payload.length, "bytes");
+ * }); // Type-checked: payload is Buffer
  * ```
  */
 export class TypedEventEmitter<

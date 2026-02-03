@@ -23,24 +23,38 @@ import {
 } from "./network-events";
 
 /**
- * UDP server for handling incoming datagram messages.
+ * Base UDP server for handling incoming datagram messages.
  *
- * Features:
- * - Automatic retry with configurable backoff on bind failures
- * - Message tracking and metrics
- * - Graceful shutdown
+ * This class provides the foundation for UDP-based communication in distributed
+ * RPC systems. It handles incoming datagram messages, manages server lifecycle, and
+ * integrates with OpenTelemetry for observability.
+ *
+ * Key Features:
+ * - Automatic retry with exponential backoff on bind failures
+ * - Message tracking and metrics collection
+ * - Graceful shutdown with proper resource cleanup
+ * - Distributed tracing support
  * - Event-driven architecture using TypedEventEmitter
+ *
+ * @remarks
+ * This class serves as a base for specialized UDP servers like BroadcastUdpServer.
+ * It provides common functionality while allowing subclasses to override message
+ * handling behavior through the handleMessage() method.
  *
  * @example
  * ```typescript
  * // Using IoC container
  * const udpServer = container.get<UdpServer>(TYPES.UdpServer);
+ *
+ * // Listen for server events
  * udpServer.on(NetworkEvent.Listening, () => {
  *   console.log("UDP server listening on port", udpServer.getPort());
  * });
+ *
  * udpServer.on(NetworkEvent.Message, ({ peer, data }) => {
  *   console.log("Received from", peer.address, ":", data);
  * });
+ *
  * await udpServer.start();
  * ```
  */
@@ -131,12 +145,13 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     const config = this.configManager.getCoreConfig();
     this.logger = this._loggerManager.getLogger(); // Reload the logger, in case the loggerManager is reloaded.
     this._abortController = new AbortController();
-    this._address = config.udp_address;
-    this._port = config.udp_port; // Default to 5707.
+    this._address = config.net.udp_address;
+    this._port = config.net.udp_port; // Default to 5707.
 
     this._retryScheduler = new RetryScheduler(() => this._attemptBind(), {
-      intervalMs: config.retry_interval,
-      maxRetries: config.retry_max,
+      interval: config.retry.interval,
+      max_try: config.retry.max_try,
+      backoff: config.retry.backoff,
       signal: this._abortController.signal,
       onRetry: (ctx) => {
         this._setState(ServerState.Retrying);

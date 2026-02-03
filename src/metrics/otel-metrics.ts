@@ -91,8 +91,33 @@ export const ServerStateValues: Record<ServerState, number> = {
 };
 
 /**
- * Storage for server state that can be observed by OpenTelemetry.
- * Used with ObservableGauge callbacks to report dynamic server states.
+ * OpenTelemetry observable gauge for tracking server state transitions.
+ *
+ * This class provides a thread-safe mechanism for tracking and reporting server state
+ * changes through OpenTelemetry's observable gauge functionality. It maintains current
+ * state information and provides callback functions for metric reporting.
+ *
+ * Key Features:
+ * - Thread-safe state management
+ * - Automatic numeric state mapping for gauges
+ * - Observable callback for OpenTelemetry integration
+ * - Service identification tracking
+ *
+ * @remarks
+ * This class is used in conjunction with OpenTelemetry's MeterProvider to create
+ * observable gauges that report server state changes. The numeric mapping allows
+ * for easy visualization of state transitions in monitoring dashboards.
+ *
+ * @example
+ * ```typescript
+ * // Update server state
+ * ServerStateMetric.setState(ServerState.Listening, "UserService", "inst-1");
+ *
+ * // Create observable gauge
+ * const gauge = meter.createObservableGauge("server_state", {
+ *   callbacks: [ServerStateMetric.createCallback()],
+ * });
+ * ```
  */
 export class ServerStateMetric {
   private static _state: ServerState = ServerState.Stopped;
@@ -221,10 +246,121 @@ export const activeConnections = netMeter.createUpDownCounter(
  * bytesCounter.add(2048, { direction: 'received' });
  * ```
  */
-export const bytesCounter = netMeter.createCounter("bytes_total", {
+export const bytesCounter = appMeter.createCounter("bytes_total", {
   description: "Total bytes sent and received",
   unit: "bytes",
 });
+
+/**
+ * Counter tracking UDP broadcast requests received.
+ * @remarks
+ * Monitors service discovery activity and UDP broadcast volume.
+ * Useful for tracking how many services are discovering this service.
+ * @example
+ * ```typescript
+ * import { udpBroadcastRequests } from './otel-metrics';
+ * udpBroadcastRequests.add(1, { service_type: 'discovery' });
+ * ```
+ */
+export const udpBroadcastRequests = appMeter.createCounter(
+  "udp_broadcast_requests_total",
+  {
+    description: "Total UDP broadcast requests received",
+  },
+);
+
+/**
+ * Counter tracking UDP broadcast responses sent.
+ * @remarks
+ * Monitors service discovery responses and broadcast response activity.
+ * Tracks how many services we've responded to during discovery.
+ * @example
+ * ```typescript
+ * import { udpBroadcastResponses } from './otel-metrics';
+ * udpBroadcastResponses.add(1, { target_service: 'OrderService' });
+ * ```
+ */
+export const udpBroadcastResponses = appMeter.createCounter(
+  "udp_broadcast_responses_total",
+  {
+    description: "Total UDP broadcast responses sent",
+  },
+);
+
+/**
+ * Histogram measuring UDP broadcast response time.
+ * @remarks
+ * Records the time taken to respond to UDP broadcast requests.
+ * Useful for monitoring service discovery latency.
+ * @example
+ * ```typescript
+ * import { udpBroadcastLatency } from './otel-metrics';
+ * udpBroadcastLatency.record(5, { request_type: 'service_discovery' });
+ * ```
+ */
+export const udpBroadcastLatency = appMeter.createHistogram(
+  "udp_broadcast_response_time",
+  {
+    description: "Time to respond to UDP broadcast requests",
+    unit: "ms",
+  },
+);
+
+/**
+ * Histogram measuring TCP connection duration.
+ * @remarks
+ * Records the duration of TCP connections from establishment to closure.
+ * Useful for monitoring connection patterns and potential connection leaks.
+ * @example
+ * ```typescript
+ * import { tcpConnectionDuration } from './otel-metrics';
+ * tcpConnectionDuration.record(connectionDuration, { peer_address: clientAddress });
+ * ```
+ */
+export const tcpConnectionDuration = appMeter.createHistogram(
+  "tcp_connection_duration",
+  {
+    description: "Duration of TCP connections",
+    unit: "ms",
+  },
+);
+
+/**
+ * Counter tracking failed TCP connection attempts.
+ * @remarks
+ * Monitors TCP connection failures for troubleshooting and reliability tracking.
+ * Useful for identifying network issues or service availability problems.
+ * @example
+ * ```typescript
+ * import { tcpConnectionsFailed } from './otel-metrics';
+ * tcpConnectionsFailed.add(1, { error_type: 'connection_refused', peer_address: clientAddress });
+ * ```
+ */
+export const tcpConnectionsFailed = appMeter.createCounter(
+  "tcp_connections_failed_total",
+  {
+    description: "Total failed TCP connection attempts",
+  },
+);
+
+/**
+ * Histogram measuring data transfer size over TCP connections.
+ * @remarks
+ * Records the size of data transferred in each TCP operation.
+ * Useful for monitoring network throughput and identifying large data transfers.
+ * @example
+ * ```typescript
+ * import { tcpDataTransferSize } from './otel-metrics';
+ * tcpDataTransferSize.record(dataSize, { transfer_type: 'request', direction: 'received' });
+ * ```
+ */
+export const tcpDataTransferSize = appMeter.createHistogram(
+  "tcp_data_transfer_size",
+  {
+    description: "Size of data transferred over TCP connections",
+    unit: "bytes",
+  },
+);
 
 /**
  * Utility class for managing OpenTelemetry meter providers and meters.
@@ -244,6 +380,37 @@ export const bytesCounter = netMeter.createCounter("bytes_total", {
  *
  * // Update state
  * ServerStateMetric.setState(ServerState.Running, 'my-service');
+ * ```
+ */
+/**
+ * Centralized OpenTelemetry metrics initialization and management.
+ *
+ * This class provides a unified interface for initializing and managing OpenTelemetry
+ * metrics within distributed RPC applications. It handles metric provider setup,
+ * resource configuration, and provides access to pre-configured metrics.
+ *
+ * Key Features:
+ * - Automatic metric provider initialization
+ * - Resource detection and configuration
+ * - Service identity integration
+ * - Pre-configured application and network metrics
+ * - Prometheus exporter integration
+ *
+ * @remarks
+ * OtelMeterics serves as the main entry point for metrics operations in the
+ * distributed RPC system. It automatically detects service attributes and
+ * configures the OpenTelemetry metric pipeline with appropriate resource attributes.
+ *
+ * @example
+ * ```typescript
+ * const metrics = new OtelMeterics({
+ *   serviceName: "OrderService",
+ *   serviceVersion: "1.0.0",
+ * });
+ *
+ * // Record application metrics
+ * executionTime.record(150, { method: "processOrder" });
+ * activeConnections.add(1, { direction: "inbound" });
  * ```
  */
 export class OtelMeterics {

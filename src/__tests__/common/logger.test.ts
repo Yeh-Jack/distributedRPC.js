@@ -70,7 +70,7 @@ describe("Logger", () => {
   it("should throw error if the logger is undefined", () => {
     const configManager = new ConfigManager();
     const loggerManager = new LoggerManager(configManager);
-    (loggerManager as any).logger = undefined;
+    (loggerManager as any)._logger = undefined;
     expect(() => loggerManager.getLogger()).toThrow(Error);
 
     loggerManager.reload();

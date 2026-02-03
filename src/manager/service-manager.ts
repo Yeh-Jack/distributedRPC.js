@@ -26,6 +26,38 @@ import { BroadcastUdpServer } from "../network/broadcast-udp-server";
 import { NetworkProtocol, getHostIP } from "../network/network-events";
 import { TcpServer } from "../network/tcp-server";
 
+/**
+ * Central orchestration service for distributed RPC system management.
+ *
+ * The ServiceManager coordinates services providers, handles service discovery, and
+ * manages the system's operational state. It serves as the entry point for service
+ * initialization and provides coordination capabilities.
+ * This service should be started up first in the whole system for services information
+ * gathering and distribution.
+ *
+ * Key Responsibilities:
+ * - Service registration and discovery coordination
+ * - Protocol version management
+ *
+ * @remarks
+ * ServiceManager accepts broadcast probing message and responses manager and system
+ * configurations for provider which will be used for configuring the service provider
+ * , hence start up a service with zero-configuration achived.
+ *
+ * @example
+ * ```typescript
+ * const serviceManager = container.get<ServiceManager>(TYPES.ServiceManager);
+ *
+ * // Initialize all services
+ * await serviceManager.initialize();
+ *
+ * // Start all managed servers
+ * await serviceManager.start();
+ *
+ * // Graceful shutdown
+ * await serviceManager.shutdown();
+ * ```
+ */
 @injectable()
 export class ServiceManager {
   public readonly PROTOCOL: BasalProtocol = {
@@ -66,7 +98,7 @@ export class ServiceManager {
   }
 
   /**
-   * Get the unique identity string of the service instance with "<>".
+   * Get the unique identity string of the service instance with `<>`.
    *
    * @returns The unique identity string.
    */

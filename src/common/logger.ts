@@ -15,26 +15,50 @@ export enum LogFormat {
 }
 
 /**
- * Singleton manager for application-wide logging.
+ * Centralized logging management for distributed RPC applications.
  *
- * The `LoggerManager` class provides a centralized way to configure and retrieve a logger instance
- * for the application. It supports dynamic reloading of logger configuration, log file rotation,
- * and multiple log formats (console and JSON).
+ * LoggerManager provides a singleton approach to application-wide logging, offering
+ * flexible configuration, multiple output formats, and automatic log rotation. It's
+ * designed to work seamlessly with dependency injection and supports dynamic configuration
+ * updates without service restarts.
  *
- * - Supports dependency injection via InversifyJS.
- * - Automatically creates a `logs` directory if it does not exist.
- * - Supports console and file transports, with daily log rotation for files.
- * - Allows dynamic reloading of logger configuration via the `reload()` method.
+ * Key Features:
+ * - Automatic logs directory creation and management
+ * - Dual output support: console and rotating files
+ * - Multiple log formats: JSON (structured) and console (colorized)
+ * - Daily log rotation with configurable retention
+ * - Dynamic configuration reloading
+ * - Error stack trace capture
+ * - Dependency injection integration
+ *
+ * @remarks
+ * This class follows the singleton pattern through dependency injection, ensuring
+ * consistent logging configuration across the entire application. It automatically
+ * creates the logs directory and configures Winston transports based on the
+ * application's configuration.
  *
  * @example
  * ```typescript
  * @injectable()
  * class MyService {
  *   constructor(
- *     @inject(TYPES.Logger) private logger: Logger,
- *     private configManager: ConfigManager
+ *     @inject(TYPES.LoggerManager) private loggerManager: LoggerManager
  *   ) {}
+ *
+ *   async process() {
+ *     const logger = this.loggerManager.getLogger();
+ *     logger.info("Processing request", { requestId: "req-123" });
+ *
+ *     try {
+ *       // Business logic
+ *     } catch (error) {
+ *       logger.error("Processing failed", { error });
+ *     }
+ *   }
  * }
+ *
+ * // Configuration reloading
+ * await loggerManager.reload(); // Updates logger with new configuration
  * ```
  */
 @injectable()

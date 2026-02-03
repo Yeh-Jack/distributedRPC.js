@@ -9,17 +9,38 @@ import { TYPES } from "../aop/di-types";
 import { LoggerManager } from "../common/logger";
 
 /**
- * Records execution metrics for method calls.
- * Provides logging-based metrics for tracking method performance and success rates.
+ * Execution metrics recorder for tracking method performance and reliability.
+ *
+ * This class provides a lightweight mechanism for recording execution metrics
+ * including timing and success rates for method calls. It's designed to work
+ * seamlessly with logging systems and can serve as a fallback metrics solution
+ * or complement to OpenTelemetry-based metrics.
+ *
+ * Key Features:
+ * - Method execution time tracking
+ * - Success/failure rate recording
+ * - Logging-based metrics (no external dependencies)
+ * - Integration with LoggerManager
+ * - Configurable logging levels
  *
  * @remarks
- * This class is designed to work with the AOP execution time interceptor
- * to automatically record metrics for wrapped services.
+ * ExecutionMetrics is designed for scenarios where lightweight metrics
+ * collection is needed without the overhead of full observability platforms.
+ * It integrates directly with the application's logging system and provides
+ * basic performance tracking capabilities.
  *
  * @example
  * ```typescript
  * const metrics = new ExecutionMetrics(loggerManager);
- * metrics.recordExecutionTime("UserService", "createUser", 150, true);
+ *
+ * // Record successful execution
+ * metrics.recordExecutionTime("UserService", "createUser", 150.5, true);
+ *
+ * // Record failed execution
+ * metrics.recordExecutionTime("PaymentService", "processPayment", 5000, false);
+ *
+ * // Output: [EXEC] UserService.createUser: 150.5000ms, success
+ * //        [EXEC] PaymentService.processPayment: 5000.0000ms, failed
  * ```
  */
 @injectable()

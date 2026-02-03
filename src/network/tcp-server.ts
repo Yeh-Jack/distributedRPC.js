@@ -13,7 +13,13 @@ import { RetryScheduler } from "../common/retry";
 import { ServerState } from "../types/basal-protocol";
 import { TYPES } from "../aop/di-types";
 import { TypedEventEmitter } from "./typed-event-emitter";
-import { activeConnections, bytesCounter } from "../metrics/otel-metrics";
+import {
+  activeConnections,
+  bytesCounter,
+  tcpConnectionDuration,
+  tcpConnectionsFailed,
+  tcpDataTransferSize,
+} from "../metrics/otel-metrics";
 import {
   NetworkEvent,
   NetworkEventMap,
@@ -21,23 +27,44 @@ import {
   NetworkProtocol,
   NetworkRetryable,
 } from "./network-events";
+import { OtelTracing, generateCorrelationId } from "../metrics/otel-tracing";
 
 /**
- * TCP server for handling incoming client connections.
+ * This class provides a robust, event-driven TCP server implementation specifically designed
+ * for distributed RPC systems. It handles incoming client connections, manages connection
+ * lifecycle, and integrates with OpenTelemetry for comprehensive observability.
  *
- * Features:
- * - Automatic retry with configurable backoff on bind failures
- * - Connection tracking and metrics
- * - Graceful shutdown with socket cleanup
+ * Key Features:
+ * - Automatic retry with exponential backoff on bind failures
+ * - Comprehensive connection tracking and metrics collection
+ * - Graceful shutdown with proper socket cleanup
+ * - Distributed tracing with correlation ID propagation
+ * - OpenTelemetry metrics for network operations
  * - Event-driven architecture using TypedEventEmitter
+ *
+ * @remarks
+ * This server is designed to be used within an InversifyJS IoC container and automatically
+ * integrates with the application's configuration and logging systems. It emits typed events
+ * for all significant state changes and network operations.
  *
  * @example
  * ```typescript
  * // Using IoC container
  * const tcpServer = container.get<TcpServer>(TYPES.TcpServer);
+ *
+ * // Listen for server events
  * tcpServer.on(NetworkEvent.Listening, () => {
  *   console.log("Server listening on port", tcpServer.getPort());
  * });
+ *
+ * tcpServer.on(NetworkEvent.Connection, ({ peer }) => {
+ *   console.log("New connection from", peer.address);
+ * });
+ *
+ * tcpServer.on(NetworkEvent.Data, ({ peer, data }) => {
+ *   // Handle incoming RPC data
+ * });
+ *
  * await tcpServer.start();
  * ```
  */
@@ -133,13 +160,14 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     if (this._state !== ServerState.Stopped) return;
 
     const config = this._configManager.getCoreConfig();
-    this._address = config.tcp_address;
-    this._port = config.tcp_port; // Default to 0.
+    this._address = config.net.tcp_address;
+    this._port = config.net.tcp_port; // Default to 0.
     this._abortController = new AbortController();
 
     this._retryScheduler = new RetryScheduler(() => this._attemptListen(), {
-      intervalMs: config.retry_interval,
-      maxRetries: config.retry_max,
+      interval: config.retry.interval,
+      max_try: config.retry.max_try,
+      backoff: config.retry.backoff,
       signal: this._abortController.signal,
       onRetry: (ctx) => {
         this._setState(ServerState.Retrying);
@@ -347,31 +375,139 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
       "peer.port": port,
     };
 
+    // Generate correlation ID for this connection
+    const correlationId = generateCorrelationId();
+    const connectionStartTime = Date.now();
+
+    // Create distributed tracing span for TCP connection
+    const connectionSpan = OtelTracing.createNetworkSpan("accept", "tcp", {
+      address,
+      port,
+      direction: "inbound",
+      attributes: {
+        "correlation.id": correlationId,
+        "network.connection.id": `tcp_${connectionStartTime}_${Math.random().toString(36).slice(2, 8)}`,
+        "network.peer.address": address,
+        "network.peer.port": port,
+      },
+    });
+
     this._sockets.add(socket); // Tracking the socket.
     activeConnections.add(1, connectionInfo); // Update connection metrics for OpenTelemetry.
 
     this.emit(NetworkEvent.Connection, { peer });
 
+    // Handle data reception with tracing
     socket.on(NetworkEvent.Data, (data) => {
       if (data.length > 0) {
-        // Call Function.apply() to force 'this' scope.
-        this.handleData.apply(this, [peer, data.toString(), connectionInfo]);
+        // Record data transfer metrics
+        tcpDataTransferSize.record(data.length, {
+          transfer_type: "request",
+          direction: "received",
+          correlation_id: correlationId,
+        });
+
+        // Create span for data handling
+        const dataHandlingSpan = OtelTracing.createNetworkSpan(
+          "handle_data",
+          "tcp",
+          {
+            address,
+            port,
+            direction: "inbound",
+            attributes: {
+              "correlation.id": correlationId,
+              "network.data.size": data.length,
+              "network.event": "data_received",
+            },
+          },
+        );
+
+        try {
+          // Call Function.apply() to force 'this' scope.
+          this.handleData.apply(this, [peer, data.toString(), connectionInfo]);
+          dataHandlingSpan.setStatus({ code: 1 }); // OK
+        } catch (error) {
+          OtelTracing.recordException(dataHandlingSpan, error as Error);
+          dataHandlingSpan.setStatus({
+            code: 2, // ERROR
+            message: (error as Error).message,
+          });
+          throw error;
+        } finally {
+          dataHandlingSpan.end();
+        }
       }
     });
 
+    // Handle connection closure with metrics
     socket.on(NetworkEvent.Close, (hadError) => {
+      const connectionDuration = Date.now() - connectionStartTime;
+
+      // Record connection duration metrics
+      tcpConnectionDuration.record(connectionDuration, {
+        correlation_id: correlationId,
+        had_error: hadError,
+      });
+
       activeConnections.add(-1, connectionInfo);
+
+      if (hadError) {
+        // Record failed connection metrics
+        tcpConnectionsFailed.add(1, {
+          error_type: "connection_closed_with_error",
+          peer_address: address,
+          correlation_id: correlationId,
+        });
+
+        connectionSpan.setStatus({
+          code: 2, // ERROR
+          message: "Connection closed with error",
+        });
+      } else {
+        connectionSpan.setStatus({
+          code: 1, // OK
+        });
+      }
+
       this.emit(NetworkEvent.Close, { peer, hadError });
       this._sockets.delete(socket); // Remove from tracking on close.
+
+      // End the connection span
+      connectionSpan.end();
     });
 
+    // Handle socket errors
     socket.on(NetworkEvent.Error, (err) => {
+      // Cast to NodeJS.ErrnoException to access the code property safely
+      const nodeError = err as NodeJS.ErrnoException;
+
+      // Record failed connection metrics
+      tcpConnectionsFailed.add(1, {
+        error_type: nodeError.code || "unknown_error",
+        peer_address: address,
+        correlation_id: correlationId,
+      });
+
+      OtelTracing.recordException(connectionSpan, err, {
+        "error.code": nodeError.code,
+        "error.message": err.message,
+      });
+
+      connectionSpan.setStatus({
+        code: 2, // ERROR
+        message: err.message,
+      });
+
       this.emit(NetworkEvent.Error, { error: err, peer });
 
       // Defensive: ensure the socket is destroyed on error to prevent leaks.
       if (!socket.destroyed) {
         socket.destroy();
       }
+
+      // End the connection span on error
+      connectionSpan.end();
     });
   }
 

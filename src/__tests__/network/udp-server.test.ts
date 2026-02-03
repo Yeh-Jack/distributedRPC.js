@@ -3,10 +3,35 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NetworkEvent } from "../../network/network-events";
 import { ServerState } from "../../types/basal-protocol";
 import { UdpServer } from "../../network/udp-server";
-import { ConfigManager } from "../../common/config";
+import { ConfigManager, DEFAULT_DISCOVERY_PORT } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
 
 vi.mock("dgram");
+
+// Mock otel-tracing to avoid OpenTelemetry context issues in tests
+vi.mock("../../metrics/otel-tracing", () => ({
+  generateCorrelationId: () => "test-correlation-id",
+  OtelTracing: {
+    createNetworkSpan: () => ({
+      setStatus: vi.fn(),
+      end: vi.fn(),
+    }),
+    recordException: vi.fn(),
+  },
+}));
+
+// Mock otel-metrics to avoid metric collection issues in tests
+vi.mock("../../metrics/otel-metrics", () => ({
+  bytesCounter: {
+    add: vi.fn(),
+  },
+  retryDuration: {
+    record: vi.fn(),
+  },
+  retryAttempts: {
+    add: vi.fn(),
+  },
+}));
 
 describe("UdpServer", () => {
   let udpServer: UdpServer;
@@ -34,7 +59,7 @@ describe("UdpServer", () => {
           (f) => f !== cb,
         );
       }),
-      address: vi.fn(() => ({ port: 5707 })),
+      address: vi.fn(() => ({ port: DEFAULT_DISCOVERY_PORT })),
       _listeners: localListeners,
     };
 
@@ -47,10 +72,17 @@ describe("UdpServer", () => {
 
     const mockConfigManager = {
       getCoreConfig: () => ({
-        udp_address: "127.0.0.1",
-        udp_port: 5707,
-        retry_interval: 10,
-        retry_max: 2,
+        net: {
+          tcp_address: "127.0.0.1",
+          tcp_port: 0,
+          udp_address: "127.0.0.1",
+          udp_port: DEFAULT_DISCOVERY_PORT,
+        },
+        retry: {
+          interval: 10,
+          max_try: 2,
+          backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
+        },
         service_name: "test-udp",
       }),
     } as unknown as ConfigManager;
@@ -77,7 +109,7 @@ describe("UdpServer", () => {
   it("getState() should return current server state", () => {
     expect(udpServer.getState()).toBe(ServerState.Stopped);
 
-    (udpServer as any).state = ServerState.Listening;
+    (udpServer as any)._state = ServerState.Listening;
     expect(udpServer.getState()).toBe(ServerState.Listening);
   });
 
@@ -91,11 +123,11 @@ describe("UdpServer", () => {
   it("start() should initialize internal state correctly", () => {
     const startPromise = udpServer.start();
 
-    expect((udpServer as any).abortController).toBeDefined();
-    expect((udpServer as any).retryScheduler).toBeDefined();
-    expect((udpServer as any).state).toBe(ServerState.Starting);
-    expect((udpServer as any).address).toBe("127.0.0.1");
-    expect((udpServer as any).port).toBe(5707);
+    expect((udpServer as any)._abortController).toBeDefined();
+    expect((udpServer as any)._retryScheduler).toBeDefined();
+    expect((udpServer as any)._state).toBe(ServerState.Starting);
+    expect((udpServer as any)._address).toBe("127.0.0.1");
+    expect((udpServer as any)._port).toBe(DEFAULT_DISCOVERY_PORT);
 
     expect(startPromise).toBeInstanceOf(Promise);
   });
@@ -124,8 +156,8 @@ describe("UdpServer", () => {
     udpServer.start();
     await Promise.resolve();
 
-    expect((udpServer as any).retryScheduler).toBeDefined();
-    expect((udpServer as any).abortController).toBeDefined();
+    expect((udpServer as any)._retryScheduler).toBeDefined();
+    expect((udpServer as any)._abortController).toBeDefined();
     expect(udpServer.getState()).toBe(ServerState.Starting);
 
     await udpServer.stop();
@@ -178,7 +210,7 @@ describe("UdpServer", () => {
         off: vi.fn((e, cb) => {
           localListeners[e] = (localListeners[e] || []).filter((f) => f !== cb);
         }),
-        address: vi.fn(() => ({ port: 5707 })),
+        address: vi.fn(() => ({ port: DEFAULT_DISCOVERY_PORT })),
         _listeners: localListeners,
       };
 
@@ -194,10 +226,17 @@ describe("UdpServer", () => {
 
     const testConfigManager = {
       getCoreConfig: () => ({
-        udp_address: "127.0.0.1",
-        udp_port: 5707,
-        retry_interval: 10,
-        retry_max: 2,
+        net: {
+          tcp_address: "127.0.0.1",
+          tcp_port: 0,
+          udp_address: "127.0.0.1",
+          udp_port: DEFAULT_DISCOVERY_PORT,
+        },
+        retry: {
+          interval: 10,
+          max_try: 2,
+          backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
+        },
         service_name: "test-exhaust",
       }),
     } as unknown as ConfigManager;
@@ -224,7 +263,7 @@ describe("UdpServer", () => {
     udpServer.start();
     await Promise.resolve();
 
-    expect((udpServer as any).abortController).toBeDefined();
+    expect((udpServer as any)._abortController).toBeDefined();
     expect(udpServer.getState()).toBe(ServerState.Starting);
 
     await udpServer.stop();
@@ -280,10 +319,17 @@ describe("UdpServer", () => {
 
     const errorConfigManager = {
       getCoreConfig: () => ({
-        udp_address: "127.0.0.1",
-        udp_port: 5707,
-        retry_interval: 10,
-        retry_max: 2,
+        net: {
+          tcp_address: "127.0.0.1",
+          tcp_port: 0,
+          udp_address: "127.0.0.1",
+          udp_port: DEFAULT_DISCOVERY_PORT,
+        },
+        retry: {
+          interval: 10,
+          max_try: 2,
+          backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
+        },
         service_name: "test-sync-error",
       }),
     } as unknown as ConfigManager;
@@ -357,14 +403,14 @@ describe("UdpServer", () => {
     await p;
 
     expect(udpServer.getState()).toBe(ServerState.Listening);
-    expect(udpServer.getPort()).toBe(5707);
+    expect(udpServer.getPort()).toBe(DEFAULT_DISCOVERY_PORT);
   });
 
   it("should properly handle state transitions", () => {
-    (udpServer as any).setState(ServerState.Listening);
+    (udpServer as any)._setState(ServerState.Listening);
     expect(udpServer.getState()).toBe(ServerState.Listening);
 
-    (udpServer as any).setState(ServerState.Listening);
+    (udpServer as any)._setState(ServerState.Listening);
     expect(udpServer.getState()).toBe(ServerState.Listening);
   });
 
@@ -372,8 +418,8 @@ describe("UdpServer", () => {
     udpServer.start();
     await Promise.resolve();
 
-    expect((udpServer as any).abortController).toBeDefined();
-    expect(typeof (udpServer as any).abortController.abort).toBe("function");
+    expect((udpServer as any)._abortController).toBeDefined();
+    expect(typeof (udpServer as any)._abortController.abort).toBe("function");
 
     await udpServer.stop();
   });
@@ -393,10 +439,17 @@ describe("UdpServer", () => {
   it("should accept custom name parameter", () => {
     const localMockConfigManager = {
       getCoreConfig: () => ({
-        udp_address: "127.0.0.1",
-        udp_port: 5707,
-        retry_interval: 10,
-        retry_max: 2,
+        net: {
+          tcp_address: "127.0.0.1",
+          tcp_port: 0,
+          udp_address: "127.0.0.1",
+          udp_port: DEFAULT_DISCOVERY_PORT,
+        },
+        retry: {
+          interval: 10,
+          max_try: 2,
+          backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
+        },
         service_name: "test-udp",
       }),
     } as unknown as ConfigManager;
@@ -416,10 +469,17 @@ describe("UdpServer", () => {
   it("should use default name when not provided", () => {
     const localMockConfigManager = {
       getCoreConfig: () => ({
-        udp_address: "127.0.0.1",
-        udp_port: 5707,
-        retry_interval: 10,
-        retry_max: 2,
+        net: {
+          tcp_address: "127.0.0.1",
+          tcp_port: 0,
+          udp_address: "127.0.0.1",
+          udp_port: DEFAULT_DISCOVERY_PORT,
+        },
+        retry: {
+          interval: 10,
+          max_try: 2,
+          backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
+        },
         service_name: "test-udp",
       }),
     } as unknown as ConfigManager;

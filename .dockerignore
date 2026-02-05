@@ -1,0 +1,15 @@
+.continue
+.git
+.github
+.pnpm-store
+.venv
+.vscode
+coverage
+dist
+docs
+logs
+node_modules
+presentation
+*.log
+*.md
+!README.md

@@ -62,10 +62,13 @@ export interface RetrySchedulerOptions extends RetryConfig {
  *     await connectToService();
  *   },
  *   {
- *     intervalMs: 1000,           // Base delay: 1 second
- *     backoffMultiplier: 2.0,     // Double delay each attempt
- *     maxDelayMs: 120000,          // Cap at 120 seconds
- *     maxRetries: 5,
+ *     interval: 1000,             // Base delay: 1 second
+ *     max_try: 5,                 // Maximum retry attempts
+ *     backoff: {
+ *       enable: true,             // Enable exponential backoff
+ *       multiplier: 2.0,          // Double delay each attempt
+ *       max_delay: 120000,        // Cap at 120 seconds
+ *     },
  *     onRetry: (ctx) => logger.warn(`Retry attempt ${ctx.attempt}`, { error: ctx.error }),
  *     onExhausted: (ctx) => logger.error("Max retries reached", { error: ctx.error }),
  *   }
@@ -76,7 +79,7 @@ export interface RetrySchedulerOptions extends RetryConfig {
  * // With AbortSignal for cancellation
  * const controller = new AbortController();
  * const abortableScheduler = new RetryScheduler(task, {
- *   intervalMs: 1000,
+ *   interval: 1000,
  *   signal: controller.signal,
  * });
  *
@@ -151,21 +154,7 @@ export class RetryScheduler {
 
         this._options.onRetry?.(ctx);
 
-        // Calculate exponential backoff delay
-        const baseDelay = this._options.interval;
-        let delay = baseDelay;
-        if (this._options.backoff.enable) {
-          const maxDelay = this._options.backoff.max_delay;
-          let multiplier = this._options.backoff.multiplier;
-          if (multiplier < 1) multiplier = DEFAULT_RETRY_MULTIPLIER; // Set to default if it's an illegal number.
-
-          const exponentialDelay = Math.min(
-            baseDelay * Math.pow(multiplier, this._attempt - 1),
-            maxDelay,
-          );
-          delay = exponentialDelay;
-        }
-
+        const delay = this._calculateDelay(); // Calculate delay
         await this._waitWithAbort(err, delay);
       } finally {
         // Record retry duration metrics for OpenTelemetry.
@@ -187,6 +176,24 @@ export class RetryScheduler {
   // --------------------------------------------
   // Private Methods
   // --------------------------------------------
+
+  // Calculate exponential backoff delay
+  private _calculateDelay(): number {
+    const baseDelay = this._options.interval;
+    let delay = baseDelay;
+    if (this._options.backoff.enable) {
+      const maxDelay = this._options.backoff.max_delay;
+      let multiplier = this._options.backoff.multiplier;
+      if (multiplier < 1) multiplier = DEFAULT_RETRY_MULTIPLIER; // Set to default if it's an illegal number.
+
+      const exponentialDelay = Math.min(
+        baseDelay * Math.pow(multiplier, this._attempt - 1),
+        maxDelay,
+      );
+      delay = exponentialDelay;
+    }
+    return delay;
+  }
 
   private _isExhausted(): boolean {
     const maxtry = this._options.max_try;

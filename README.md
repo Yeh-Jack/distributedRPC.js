@@ -1,5 +1,12 @@
 # distributedRPC.js
 
+[![Node](https://img.shields.io/badge/Node-%3E%3D18.0-green)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)](https://www.typescriptlang.org/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue)](LICENSE)
+[![Coverage](https://img.shields.io/badge/Coverage-0%25-orange)](.github/workflows/ci.yml)
+[![Downloads](https://img.shields.io/npm/dm/distributedrpc.js)](https://npmjs.com/package/distributedrpc.js)
+[![Stars](https://img.shields.io/github/stars/anomalyco/distributedRPC.js)](https://github.com/anomalyco/distributedRPC.js)
+
 Node.js implementation of distributed RPC service framework with Redis-based message queuing and OpenTelemetry observability. Aim at zero-config (or as less as possible), horizontal scalable and self-healing.
 
 ## Architecture

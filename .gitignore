@@ -54,6 +54,9 @@ web_modules/
 # Optional eslint cache
 .eslintcache
 
+# Optional GitHub files
+.secrets
+
 # Optional stylelint cache
 .stylelintcache
 
@@ -81,6 +84,7 @@ out
 
 # Build output
 .nuxt
+bin/
 dist/
 build/
 

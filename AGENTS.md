@@ -140,7 +140,7 @@ npx prettier --write src/**/*.{ts,js,json}
 - Follow "Arrange, Act, Assert" pattern for test cases
 
 ### Test Coverage
-- Aim for high code coverage (>80%)
+- Aim for high code coverage: branches >75%, statements >80%, functions >90%
 - Focus on testing edge cases and error conditions
 - Mock external dependencies appropriately
 - Ensure tests are isolated from each other

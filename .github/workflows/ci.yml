@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+
+env:
+  DOCKER_REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2+sha512.41872f037ad22f7348e3b1debbaf7e867cfd448f2726d9cf74c08f19507c31d2c8e7a11525b983febc2df640b5438dee6023ebb1f84ed43cc2d654d2bc326264
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build TypeScript
+        run: pnpm run build
+
+      - name: Run tests with coverage
+        run: pnpm run test:coverage --coverage.reporter=html --coverage.reporter=lcov
+
+      - name: Upload coverage report
+        if: env.ACT != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+
+      - name: Extract coverage percentage
+        id: coverage
+        if: env.ACT != 'true'
+        run: |
+          COVERAGE=$(grep -A10 "All files" coverage/index.html | grep -oP '\d+\.\d+(?=%)' | head -1 || echo "0")
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+
+      - name: Update README with coverage
+        if: env.ACT != 'true'
+        run: |
+          if [ -f README.md ]; then
+            sed -i '/^# distributedRPC.js$/a\\n[![Coverage](https://img.shields.io/badge/Coverage-'${{ steps.coverage.outputs.coverage }}'%25-orange)]('${{ github.server_url }}/${{ github.repository }}/actions/workflows/ci.yml)'\' README.md
+          fi
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      # - name: Build and push Docker image
+      #   uses: docker/build-push-action@v5
+      #   with:
+      #     context: .
+      #     push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      #     tags: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+      #     cache-from: type=gha
+      #     cache-to: type=gha,mode=max
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+      # - name: Login to Docker Registry
+      #   uses: docker/login-action@v3
+      #   with:
+      #     registry: ${{ env.DOCKER_REGISTRY }}
+      #     username: ${{ github.actor }}
+      #     password: ${{ secrets.GITHUB_TOKEN }}
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+      # - name: Push Docker image
+      #   run: |
+      #     docker push ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'

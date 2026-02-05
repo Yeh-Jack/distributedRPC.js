@@ -36,7 +36,7 @@ ARG PNPM_VERSION="10.28.2"
 ENV NODE_VERSION=22
 ENV TZ="Asia/Taipei"
 
-# --- Install Node.js, OpenCode and skills. ---
+# --- Install Node.js, OpenCode and "UI UX Pro Max" skill globally. ---
 RUN \
     # --- Install the specific version of node.js. ---
     su node -c ". /usr/local/share/nvm/nvm.sh && nvm install --default ${NODE_VERSION} && nvm use default" && \
@@ -44,7 +44,10 @@ RUN \
     # Initialize the ui-ux-pro-max-skill by `uipro init --ai opencode` in your project folder.
     npm install -g pnpm@${PNPM_VERSION} opencode-ai uipro-cli && \
     # --- Install corepack. ---
-    corepack enable && corepack use pnpm@${PNPM_VERSION} && \
+    corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+
+# --- Install skills and make default configurations for the AI assistances. ---
+RUN \
     # --- Install Anthropic skills. ---
     mkdir -p ${SKILL_PATH} && \
     git clone --depth 1 https://github.com/anthropics/skills.git ${OPEN_CODE_PATH}/anthropic-skills && \
@@ -105,7 +108,11 @@ models:\n\
     roles:\n\
       - autocomplete\n\
     capabilities:\n\
-      - code_completion" > /home/${USER}/.continue/config.yaml && chown -R ${USER}:${USER} /home/${USER}/.continue
+      - code_completion" > /home/${USER}/.continue/config.yaml && chown -R ${USER}:${USER} /home/${USER}/.continue && \
+echo "opencode auth login\n\
+opencode\n\
+pnpm test:coverage --ui" > /home/${USER}/.bash_history && chown ${USER}:${USER} /home/${USER}/.bash_history
+
 
 # Make default shell to zsh which is installed in the base image.
 #ARG DEF_SHELL="/bin/zsh"

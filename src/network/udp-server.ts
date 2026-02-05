@@ -65,8 +65,8 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
   protected configManager: ConfigManager;
   protected logger: ReturnType<LoggerManager["getLogger"]>;
 
-  private _loggerManager: LoggerManager;
   private _abortController!: AbortController;
+  private _loggerManager: LoggerManager;
   private _retryScheduler!: RetryScheduler;
   private _state: ServerState = ServerState.Stopped;
 
@@ -143,25 +143,29 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     if (this._state !== ServerState.Stopped) return;
 
     const config = this.configManager.getCoreConfig();
+    const netConfig = config.net;
+    const retryConfig = config.retry;
+
     this.logger = this._loggerManager.getLogger(); // Reload the logger, in case the loggerManager is reloaded.
     this._abortController = new AbortController();
-    this._address = config.net.udp_address;
-    this._port = config.net.udp_port; // Default to 5707.
+    this._address = netConfig.udp_address;
+    this._port = netConfig.udp_port; // Default to 5707.
 
     this._retryScheduler = new RetryScheduler(() => this._attemptBind(), {
-      interval: config.retry.interval,
-      max_try: config.retry.max_try,
-      backoff: config.retry.backoff,
+      interval: retryConfig.interval,
+      max_try: retryConfig.max_try,
+      backoff: retryConfig.backoff,
       signal: this._abortController.signal,
       onRetry: (ctx) => {
         this._setState(ServerState.Retrying);
         this.logger.warn(`Retry attempt #${ctx.attempt}.`);
       },
       onExhausted: (ctx) => {
-        this._setState(ServerState.Error);
+        this._setState(ServerState.Halt);
         this.logger.error(`Retry exhausted after ${ctx.attempt} attempts.`);
       },
       onError: (err) => {
+        this._setState(ServerState.Error);
         this.logger.error(`Retry schedule error: ${err}`);
       },
     });

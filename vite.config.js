@@ -7,7 +7,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./test/setup.js'],
     coverage: {
-      provider: 'c8',
+      provider: 'v8',
       reporter: ['text', 'json', 'html'],
       include: ['src/**/*'],
       exclude: ['test/', 'src/main.js']

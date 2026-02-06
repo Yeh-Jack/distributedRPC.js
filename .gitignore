@@ -54,6 +54,9 @@ web_modules/
 # Optional eslint cache
 .eslintcache
 
+# Optional GitHub files
+.secrets
+
 # Optional stylelint cache
 .stylelintcache
 
@@ -81,8 +84,12 @@ out
 
 # Build output
 .nuxt
+bin/
 dist/
 build/
+
+# TypeDoc output
+docs/
 
 # Gatsby files
 .cache/
@@ -127,6 +134,10 @@ build/
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
 
+# Presentation related.
+presentation
+venv
+
 # yarn v3
 .pnp.*
 .yarn/*
@@ -141,6 +152,7 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
 # IDE
+.continue/
 .vscode/
 .idea/
 

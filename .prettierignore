@@ -1,0 +1,10 @@
+# .prettierignore
+.pnpm-store
+build
+coverage
+dist
+docs
+logs
+node_modules
+package-lock.json
+pnpm-lock.yaml

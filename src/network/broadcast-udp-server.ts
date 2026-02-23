@@ -5,11 +5,10 @@
  */
 
 import { Socket as UdpSocket, RemoteInfo } from "dgram";
-import { inject, injectable } from "inversify";
+import { injectable } from "inversify";
 
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
-import { TYPES } from "../aop/di-types";
 import { UdpServer } from "../network/udp-server";
 import { BroadcastResponse, PROBE_MESSAGE } from "../types/basal-protocol";
 import { NetworkDirection, OtelTracing } from "../metrics/otel-tracing";
@@ -61,11 +60,10 @@ export class BroadcastUdpServer extends UdpServer {
   private _responseBuffer!: Buffer;
 
   constructor(
-    @inject(TYPES.ConfigManager) configManager: ConfigManager,
-    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
+    configManager: ConfigManager,
     name: string = "broadcast-udp-server",
   ) {
-    super(configManager, loggerManager, name);
+    super(configManager, name);
   }
 
   /**

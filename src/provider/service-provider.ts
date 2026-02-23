@@ -1,5 +1,5 @@
 import { Server } from "net";
-import { inject, injectable } from "inversify";
+import { injectable } from "inversify";
 import { DetectedResourceAttributes } from "@opentelemetry/resources";
 import { ObservableCallback } from "@opentelemetry/api";
 import {
@@ -17,7 +17,6 @@ import {
   getAppEnv,
   UNKNOWN_ATTRIBUTE,
 } from "../types/basal-protocol";
-import { TYPES } from "../aop/di-types";
 import {
   createNamedTcpServer,
   createServiceManagerDiscover,
@@ -56,7 +55,6 @@ export class ServiceProvider {
 
   private readonly _FOLLOW_UP: string = "  --> ";
   private _initialized: boolean = false;
-  private _loggerManager!: LoggerManager;
   private _serviceManager: BroadcastResponse[] | null = [];
   private _state: ExecutionState = ExecutionState.Stopped;
 
@@ -65,16 +63,12 @@ export class ServiceProvider {
   private _metricsCallback?: ObservableCallback;
 
   /**
-   * Creates a ServiceProvider instance with the provided dependencies.
-   *
-   * @param configManager - The configuration manager for retrieving service settings.
-   * @param loggerManager - The logger manager for obtaining the application logger.
+   * Creates a ServiceProvider instance.
    */
-  public constructor(
-    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
-  ) {
-    this.configManager = new ConfigManager();
-    this._loggerManager = loggerManager;
+  public constructor() {
+    const config = new ConfigManager();
+    this.configManager = config;
+    this.logger = config.getLogger();
     this.reload();
   }
 
@@ -103,6 +97,10 @@ export class ServiceProvider {
    */
   protected getIdentity(): string {
     return `${this.PROTOCOL.provider.name}-${this.PROTOCOL.provider.id}`;
+  }
+
+  public getLogger() {
+    return this.logger;
   }
 
   /**
@@ -173,7 +171,10 @@ export class ServiceProvider {
    */
   protected async initializeTcpServer(name: string): Promise<void> {
     try {
-      const tcpServer: TcpServer = createNamedTcpServer(name);
+      const tcpServer: TcpServer = createNamedTcpServer(
+        this.configManager,
+        name,
+      );
       await tcpServer.start();
       this.tasks.set(name, tcpServer);
     } catch (error) {
@@ -196,11 +197,6 @@ export class ServiceProvider {
     if (this.configManager) {
       this.configManager.reload();
       this._setConfigManager(this.configManager);
-    }
-
-    if (this._loggerManager) {
-      this._loggerManager.reload();
-      this._setLoggerManager(this._loggerManager);
     }
 
     this.logger.silly(`Reloading in subclass ...`);
@@ -378,6 +374,7 @@ export class ServiceProvider {
     const discoveryName: string =
       discoveryConfig.description || UNKNOWN_ATTRIBUTE;
     const discovery = createServiceManagerDiscover(
+      this.configManager,
       discoveryName,
       discoveryConfig,
     );
@@ -466,20 +463,8 @@ export class ServiceProvider {
    */
   private _setConfigManager(configManager: ConfigManager) {
     this.configManager = configManager;
+    this.logger = configManager.getLogger();
     this._updateServiceName();
-  }
-
-  /**
-   * Encapsulate jobs for setting LoggerManager.
-   *
-   * @param loggerManager
-   */
-  private _setLoggerManager(loggerManager: LoggerManager) {
-    // The initial / injected LoggerManager has no service_name set, so we need to reload it after updating the config.
-    loggerManager?.reload();
-
-    this._loggerManager = loggerManager;
-    this.logger = loggerManager?.getLogger() ?? (console as any); // Fallback to console if no loggerManager.
   }
 
   private _updateServiceName() {

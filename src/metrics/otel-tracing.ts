@@ -13,6 +13,7 @@ import {
   trace,
 } from "@opentelemetry/api";
 import { resourceFromAttributes } from "@opentelemetry/resources";
+import { ConfigManager } from "../common/config";
 import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
@@ -481,7 +482,7 @@ export class OtelTracer {
         });
 
         // 2. Configure the Exporter
-        const exporter = createOtelExporter();
+        const exporter = createOtelExporter(new ConfigManager());
 
         // 3. Initialize the Tracer Provider with the resource and processors.
         /*

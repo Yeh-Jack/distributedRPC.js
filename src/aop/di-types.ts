@@ -5,7 +5,6 @@
 export const TYPES = {
   BroadcastUdpServer: Symbol.for("BroadcastUdpServer"),
   ConfigManager: Symbol.for("ConfigManager"),
-  LoggerManager: Symbol.for("LoggerManager"),
   Logger: Symbol.for("Logger"),
   None: Symbol.for("None"),
   ServiceManager: Symbol.for("ServiceManager"),

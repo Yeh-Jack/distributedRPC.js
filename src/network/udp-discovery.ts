@@ -5,11 +5,9 @@
  */
 
 import * as os from "os";
-import { inject, injectable } from "inversify";
+import { injectable } from "inversify";
 
 import { ConfigManager, DEFAULT_DISCOVERY_PORT } from "../common/config";
-import { LoggerManager } from "../common/logger";
-import { TYPES } from "../aop/di-types";
 import { SendOptions, UdpClient } from "./udp-client";
 import { BroadcastResponse, PROBE_MESSAGE } from "../types/basal-protocol";
 import {
@@ -97,12 +95,8 @@ export class UdpDiscovery extends UdpClient {
     timeout: 5000, // Default to 5 seconds.
   };
 
-  constructor(
-    @inject(TYPES.ConfigManager) configManager: ConfigManager,
-    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
-    name: string = "udp-discovery",
-  ) {
-    super(configManager, loggerManager, name);
+  constructor(configManager: ConfigManager, name: string = "udp-discovery") {
+    super(configManager, name);
     const broadcasts = getBroadcastAddress(); // Get an available broadcast address.
     if (broadcasts) {
       UdpDiscovery.DEFAULT_OPTIONS.address = broadcasts;
@@ -192,12 +186,7 @@ export class UdpDiscovery extends UdpClient {
 
       // Set up response collection
       // const options: SendOptions = { address, port, timeout };
-      await this._collectResponses(
-        message,
-        options,
-        responses,
-        maxResponses,
-      );
+      await this._collectResponses(message, options, responses, maxResponses);
 
       const duration = Date.now() - startTime;
       await this.stop();
@@ -277,17 +266,16 @@ export class UdpDiscovery extends UdpClient {
   // Private Methods
   // --------------------------------------------
 
-  
   /**
    * Bussiness logic of finding service managers.
    *
    * @private
    * @async
-   * @param {string} probeMessage 
-   * @param {SendOptions} options 
-   * @param {BroadcastResponse[]} responses 
-   * @param {number} maxResponses 
-   * @returns {Promise<void>} 
+   * @param {string} probeMessage
+   * @param {SendOptions} options
+   * @param {BroadcastResponse[]} responses
+   * @param {number} maxResponses
+   * @returns {Promise<void>}
    */
   private async _collectResponses(
     probeMessage: string,

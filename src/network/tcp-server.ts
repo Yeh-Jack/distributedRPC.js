@@ -4,7 +4,7 @@
  */
 
 import { createServer, Server, Socket as TcpSocket } from "net";
-import { inject, injectable } from "inversify";
+import { injectable } from "inversify";
 
 import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
@@ -81,7 +81,6 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   protected logger: ReturnType<LoggerManager["getLogger"]>;
 
   private _abortController!: AbortController;
-  private _loggerManager: LoggerManager;
   private _retryScheduler!: RetryScheduler;
   private _state: ExecutionState = ExecutionState.Stopped;
   private _server: Server | undefined = undefined;
@@ -95,18 +94,12 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
    * Creates a new TCP server instance.
    *
    * @param configManager - The configuration manager for retrieving service settings.
-   * @param loggerManager - The logger manager for obtaining the application logger.
    * @param name - Optional name to identify this server instance.
    */
-  constructor(
-    @inject(TYPES.ConfigManager) configManager: ConfigManager,
-    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
-    name: string = "tcp-server",
-  ) {
+  constructor(configManager: ConfigManager, name: string = "tcp-server") {
     super();
     this.configManager = configManager;
-    this._loggerManager = loggerManager;
-    this.logger = loggerManager.getLogger();
+    this.logger = configManager.getLogger();
     this.name = name;
 
     // Prevent process crash if 'error' is emitted and no one is listening
@@ -170,7 +163,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     const netConfig = config.net;
     const retryConfig = config.retry;
 
-    this.logger = this._loggerManager.getLogger(); // Reload the logger, in case the loggerManager is reloaded.
+    this.logger = this.configManager.getLogger(); // Reload the logger.
     this._abortController = new AbortController();
     this._address = netConfig.tcp_address;
     this._port = netConfig.tcp_port; // Default to 0.

@@ -1,8 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import yaml from "js-yaml";
-import { inject, injectable } from "inversify";
-import { LogFormat } from "./logger";
+import { LogFormat, LoggerManager } from "./logger";
 import {
   AppEnv,
   ServiceManagerDiscovery,
@@ -107,7 +106,6 @@ export interface ProviderConfig<
  * - YAML file loading with automatic search paths (config.yml, config/config.yml)
  * - Type-safe generic configuration with TypeScript
  * - Automatic default value fallback for missing configuration
- * - Dependency injection support via InversifyJS
  * - Environment-aware configuration detection
  *
  * @typeParam T_App - The application-specific configuration type extending AppConfig.
@@ -121,7 +119,6 @@ export interface ProviderConfig<
  * @example
  * ```typescript
  * // Extend for type-safe configuration access
- * @injectable()
  * class OrderServiceConfig extends ConfigManager<AppConfig, CoreConfig> {
  *   getServiceName(): string {
  *     return this.getConfig().core.service_name;
@@ -133,11 +130,12 @@ export interface ProviderConfig<
  * }
  *
  * // Use in services
- * @injectable()
  * class OrderService {
- *   constructor(
- *     @inject(TYPES.ConfigManager) private config: OrderServiceConfig
- *   ) {}
+ *   private config: OrderServiceConfig;
+ *
+ *   constructor() {
+ *     this.config = new OrderServiceConfig();
+ *   }
  *
  *   async start() {
  *     const port = this.config.getTcpPort();
@@ -146,12 +144,12 @@ export interface ProviderConfig<
  * }
  * ```
  */
-@injectable()
 export class ConfigManager<
   T_App extends AppConfig = AppConfig,
   T_Core extends CoreConfig = CoreConfig,
 > {
   protected config: ProviderConfig<T_App, T_Core>;
+  private _loggerManager: LoggerManager;
 
   /**
    * Public constructor for initializing and load the configuration.
@@ -161,6 +159,7 @@ export class ConfigManager<
    */
   public constructor() {
     this.config = this._loadConfig();
+    this._loggerManager = new LoggerManager(this);
   }
 
   /**
@@ -195,6 +194,24 @@ export class ConfigManager<
   }
 
   /**
+   * Retrieves the LoggerManager instance for this configuration.
+   *
+   * @returns {LoggerManager} The LoggerManager instance.
+   */
+  public getLoggerManager(): LoggerManager {
+    return this._loggerManager;
+  }
+
+  /**
+   * Retrieves the logger instance for this configuration.
+   *
+   * @returns {Logger} The logger instance.
+   */
+  public getLogger() {
+    return this._loggerManager.getLogger();
+  }
+
+  /**
    * Reloads the configuration by re-invoking the configuration loading logic.
    *
    * @remarks
@@ -204,6 +221,7 @@ export class ConfigManager<
    */
   public async reload(): Promise<void> {
     this.config = this._loadConfig();
+    this._loggerManager.reload();
   }
 
   // --------------------------------------------

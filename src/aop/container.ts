@@ -5,13 +5,11 @@
 
 import "reflect-metadata";
 import { Container } from "inversify";
-import { Logger } from "winston";
 import { ConsoleSpanExporter } from "@opentelemetry/sdk-trace-node";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc";
 
 import { TYPES } from "./di-types";
 import { ConfigManager } from "../common/config";
-import { LoggerManager } from "../common/logger";
 import { ExecutionMetrics } from "../metrics/exec-metrics";
 import { instrumentService } from "../aop/exec-time-interceptor";
 
@@ -36,18 +34,20 @@ export const container = new Container();
  * Creates a new named TCP server instance.
  * Use this factory function to acquire TCP server instances with specific names.
  *
+ * @param configManager - The configuration manager to use for this server
  * @param name - Unique identifier for the server instance
  * @returns A new TcpServer instance with the given name
  * @example
  * ```typescript
- * const tcpServer = createNamedTcpServer("my-server");
+ * const tcpServer = createNamedTcpServer(configManager, "my-server");
  * await tcpServer.start();
  * ```
  */
-export function createNamedTcpServer(name: string): TcpServer {
-  const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
-  const loggerManager = container.get<LoggerManager>(TYPES.LoggerManager);
-  return new TcpServer(configManager, loggerManager, name);
+export function createNamedTcpServer(
+  configManager: ConfigManager,
+  name: string,
+): TcpServer {
+  return new TcpServer(configManager, name);
 }
 
 /**
@@ -63,27 +63,40 @@ export function createNamedTcpServer(name: string): TcpServer {
  * await udpServer.start();
  * ```
  */
+/**
+ * Creates a new named UDP server instance.
+ * Use this factory function to acquire UDP server instances with specific names.
+ * For broadcast server, use name "broadcast" to get a BroadcastUdpServer.
+ *
+ * @param configManager - The configuration manager to use for this server
+ * @param name - Unique identifier for the server instance
+ * @returns A new UdpServer instance with the given name, or BroadcastUdpServer if name is "broadcast"
+ * @example
+ * ```typescript
+ * const udpServer = createNamedUdpServer(configManager, "my-server");
+ * await udpServer.start();
+ * ```
+ */
 export function createNamedUdpServer(
+  configManager: ConfigManager,
   name: string,
   type: Symbol,
 ): UdpServer | BroadcastUdpServer {
-  const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
-  const loggerManager = container.get<LoggerManager>(TYPES.LoggerManager);
-
   if (type === TYPES.BroadcastUdpServer) {
-    return new BroadcastUdpServer(configManager, loggerManager, name);
+    return new BroadcastUdpServer(configManager, name);
   }
 
-  return new UdpServer(configManager, loggerManager, name);
+  return new UdpServer(configManager, name);
 }
 
 /**
- * Create OpenTelemetry exporter instance based on runtime envieonment.
+ * Create OpenTelemetry exporter instance based on runtime environment.
  * Returns `ConsoleSpanExporter` if it's `development`, otherwise returns
  * `OTLPTraceExporter` instead.
+ *
+ * @param configManager - The configuration manager to use for determining the environment
  */
-export function createOtelExporter() {
-  const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
+export function createOtelExporter(configManager: ConfigManager) {
   if (AppEnv.development === configManager.getAppEnv()) {
     return new ConsoleSpanExporter();
   } else {
@@ -95,13 +108,12 @@ export function createOtelExporter() {
 }
 
 export function createServiceManagerDiscover(
+  configManager: ConfigManager,
   name: string,
   type: Symbol,
 ): UdpDiscovery | undefined {
   if (type === TYPES.UdpDiscovery) {
-    const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
-    const loggerManager = container.get<LoggerManager>(TYPES.LoggerManager);
-    return new UdpDiscovery(configManager, loggerManager, name);
+    return new UdpDiscovery(configManager, name);
   }
 
   return undefined;
@@ -114,28 +126,6 @@ export function createServiceManagerDiscover(
 function getContainer(): Container {
   return container;
 }
-
-// Bind ConfigManager
-container
-  .bind<ConfigManager>(TYPES.ConfigManager)
-  .to(ConfigManager)
-  .inSingletonScope();
-
-// Bind LoggerManager with dependency on ConfigManager
-container
-  .bind<LoggerManager>(TYPES.LoggerManager)
-  .to(LoggerManager)
-  .inSingletonScope();
-
-// Bind Logger (retrieved from LoggerManager)
-container.bind<Logger>(TYPES.Logger).toDynamicValue((ctx) => {
-  const container = getContainer();
-  const loggerManager = container.get<LoggerManager>(TYPES.LoggerManager);
-  return loggerManager.getLogger();
-});
-
-// Metrics singleton
-container.bind(ExecutionMetrics).toSelf().inSingletonScope();
 
 // Bind BroadcastUdpServer
 container
@@ -158,17 +148,23 @@ container.bind<UdpDiscovery>(TYPES.UdpDiscovery).to(UdpDiscovery);
 container
   .bind<ServiceProvider>(TYPES.ServiceProvider)
   .to(ServiceProvider)
-  .onActivation((_ctx, instance) => {
-    const container = getContainer();
-    const metrics = container.get(ExecutionMetrics);
-    return instrumentService(instance, metrics);
+  .onActivation((_ctx, _instance) => {
+    // Create a new ServiceProvider instance
+    const serviceProvider = new ServiceProvider();
+
+    // Create a new ExecutionMetrics instance for this ServiceProvider
+    const metrics = new ExecutionMetrics(serviceProvider.getLogger());
+    return instrumentService(serviceProvider, metrics);
   });
 
 container
   .bind<ServiceManager>(TYPES.ServiceManager)
   .to(ServiceManager)
-  .onActivation((_ctx, instance) => {
-    const container = getContainer();
-    const metrics = container.get(ExecutionMetrics);
-    return instrumentService(instance, metrics);
+  .onActivation((_ctx, _instance) => {
+    // Create a new ServiceManager instance
+    const serviceManager = new ServiceManager();
+
+    // Create a new ExecutionMetrics instance for this ServiceManager
+    const metrics = new ExecutionMetrics(serviceManager.getLogger());
+    return instrumentService(serviceManager, metrics);
   });

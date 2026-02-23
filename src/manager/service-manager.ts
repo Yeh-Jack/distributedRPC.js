@@ -1,5 +1,5 @@
 import { Server } from "net";
-import { inject, injectable } from "inversify";
+import { injectable } from "inversify";
 
 import {
   AccessPoint,
@@ -10,7 +10,6 @@ import {
 } from "../types/basal-protocol";
 import { TYPES } from "../aop/di-types";
 import { createNamedUdpServer } from "../aop/container";
-import { LoggerManager } from "../common/logger";
 import { BroadcastUdpServer } from "../network/broadcast-udp-server";
 import { TcpServer } from "../network/tcp-server";
 import { ServiceProvider } from "../provider/service-provider";
@@ -62,15 +61,10 @@ export class ServiceManager extends ServiceProvider {
   // Resources should be released during shutdown.
 
   /**
-   * Creates a ServiceManager instance with the provided dependencies.
-   *
-   * @param configManager - The configuration manager for retrieving service settings.
-   * @param loggerManager - The logger manager for obtaining the application logger.
+   * Creates a ServiceManager instance.
    */
-  public constructor(
-    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
-  ) {
-    super(loggerManager);
+  public constructor() {
+    super();
   }
 
   /**
@@ -153,6 +147,7 @@ export class ServiceManager extends ServiceProvider {
 
       // Construct the UDP broadcast server.
       const broadcastServer = createNamedUdpServer(
+        this.configManager,
         name,
         TYPES.BroadcastUdpServer,
       ) as unknown as BroadcastUdpServer;

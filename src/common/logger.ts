@@ -2,9 +2,7 @@ import fs from "fs";
 import path from "path";
 import DailyRotateFile from "winston-daily-rotate-file";
 import { createLogger, format, transports, Logger } from "winston";
-import { inject, injectable } from "inversify";
 import { ConfigManager } from "./config";
-import { TYPES } from "../aop/di-types";
 import { UNKNOWN_ATTRIBUTE } from "../types/basal-protocol";
 
 const { combine, timestamp, printf, json, errors, colorize } = format;
@@ -29,7 +27,6 @@ export enum LogFormat {
  * - Daily log rotation with configurable retention
  * - Dynamic configuration reloading
  * - Error stack trace capture
- * - Dependency injection integration
  *
  * @remarks
  * This class follows the singleton pattern through dependency injection, ensuring
@@ -39,20 +36,22 @@ export enum LogFormat {
  *
  * @example
  * ```typescript
- * @injectable()
  * class MyService {
- *   constructor(
- *     @inject(TYPES.LoggerManager) private loggerManager: LoggerManager
- *   ) {}
+ *   private loggerManager: LoggerManager;
+ *   private logger: Logger;
+ *
+ *   constructor(configManager: ConfigManager) {
+ *     this.loggerManager = configManager.getLoggerManager();
+ *     this.logger = this.loggerManager.getLogger();
+ *   }
  *
  *   async process() {
- *     const logger = this.loggerManager.getLogger();
- *     logger.info("Processing request", { requestId: "req-123" });
+ *     this.logger.info("Processing request", { requestId: "req-123" });
  *
  *     try {
  *       // Business logic
  *     } catch (error) {
- *       logger.error("Processing failed", { error });
+ *       this.logger.error("Processing failed", { error });
  *     }
  *   }
  * }
@@ -61,19 +60,16 @@ export enum LogFormat {
  * await loggerManager.reload(); // Updates logger with new configuration
  * ```
  */
-@injectable()
 export class LoggerManager {
-  private _logger!: Logger;
   private _configManager: ConfigManager;
+  private _logger!: Logger;
 
   /**
-   * Creates a LoggerManager instance with the injected ConfigManager.
+   * Creates a LoggerManager instance with the provided ConfigManager.
    *
    * @param configManager - The configuration manager for retrieving log settings.
    */
-  public constructor(
-    @inject(TYPES.ConfigManager) configManager: ConfigManager,
-  ) {
+  public constructor(configManager: ConfigManager) {
     this._configManager = configManager;
 
     // Create logs directory if it doesn't exist
@@ -82,6 +78,10 @@ export class LoggerManager {
       fs.mkdirSync(logDir, { recursive: true });
     }
     this.reload();
+  }
+
+  public close(): void {
+    this._logger.close();
   }
 
   /**
@@ -171,7 +171,7 @@ export class LoggerManager {
     });
   }
 
-  public close(): void {
-    this._logger.close();
+  public setConfigManager(configManager: ConfigManager): void {
+    this._configManager = configManager;
   }
 }

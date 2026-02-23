@@ -4,14 +4,13 @@
  */
 
 import dgram, { Socket as UdpSocket, RemoteInfo } from "dgram";
-import { inject, injectable } from "inversify";
+import { injectable } from "inversify";
 
 import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
 import { ExecutionState } from "../types/basal-protocol";
-import { TYPES } from "../aop/di-types";
 import { TypedEventEmitter } from "./typed-event-emitter";
 import { bytesCounter } from "../metrics/otel-metrics";
 import {
@@ -86,7 +85,6 @@ export class UdpClient extends TypedEventEmitter<NetworkEventMap> {
   protected logger: ReturnType<LoggerManager["getLogger"]>;
 
   private _abortController!: AbortController;
-  private _loggerManager: LoggerManager;
   private _retryScheduler!: RetryScheduler;
   private _state: ExecutionState = ExecutionState.Stopped;
 
@@ -97,18 +95,12 @@ export class UdpClient extends TypedEventEmitter<NetworkEventMap> {
    * Creates a new UDP client instance.
    *
    * @param configManager - The configuration manager for retrieving service settings.
-   * @param loggerManager - The logger manager for obtaining the application logger.
    * @param name - Optional name to identify this client instance.
    */
-  constructor(
-    @inject(TYPES.ConfigManager) configManager: ConfigManager,
-    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
-    name: string = "udp-client",
-  ) {
+  constructor(configManager: ConfigManager, name: string = "udp-client") {
     super();
     this.configManager = configManager;
-    this._loggerManager = loggerManager;
-    this.logger = loggerManager.getLogger();
+    this.logger = configManager.getLogger();
     this.name = name;
   }
 
@@ -155,7 +147,7 @@ export class UdpClient extends TypedEventEmitter<NetworkEventMap> {
     const config = this.configManager.getCoreConfig();
     const retryConfig = config.retry;
 
-    this.logger = this._loggerManager.getLogger(); // Reload the logger, in case the loggerManager is reloaded.
+    this.logger = this.configManager.getLogger(); // Reload the logger.
     this._abortController = new AbortController();
 
     this._setState(ExecutionState.Starting);

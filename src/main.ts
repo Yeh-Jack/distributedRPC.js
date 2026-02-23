@@ -9,6 +9,7 @@ import { container } from "./aop/container";
 import { TYPES } from "./aop/di-types";
 import { ServiceManager } from "./manager/service-manager";
 import { ServiceProvider } from "./provider/service-provider";
+import { ConfigManager } from "./common/config";
 
 const INTERRUPT_KEY = "<Ctrl+C>";
 
@@ -53,7 +54,11 @@ function handleInterruption(provider: ServiceProvider, logger: any) {
  * ```
  */
 async function main(): Promise<void> {
-  const logger = container.get<any>(TYPES.Logger);
+  const config=new ConfigManager();
+  const core=config.getCoreConfig();
+  core.service_name="Main";
+  const logger = config.getLogger();
+
   const manager = container.get<ServiceManager>(TYPES.ServiceManager);
   const managerName = manager.getServiceName();
   const provider = container.get<ServiceProvider>(TYPES.ServiceProvider);

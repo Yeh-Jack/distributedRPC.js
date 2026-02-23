@@ -11,15 +11,8 @@ import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { TYPES } from "../aop/di-types";
 import { UdpServer } from "../network/udp-server";
-import {
-  BroadcastResponse,
-  ServerState,
-  PROBE_MESSAGE,
-} from "../types/basal-protocol";
-import {
-  OtelTracing,
-  generateCorrelationId,
-} from "../metrics/otel-tracing";
+import { BroadcastResponse, PROBE_MESSAGE } from "../types/basal-protocol";
+import { NetworkDirection, OtelTracing } from "../metrics/otel-tracing";
 import {
   udpBroadcastRequests,
   udpBroadcastResponses,
@@ -113,37 +106,36 @@ export class BroadcastUdpServer extends UdpServer {
   // --------------------------------------------
 
   protected override handleMessage(msg: Buffer, rinfo: RemoteInfo): void {
+    const peerInfo = `<${rinfo.address}:${rinfo.port}>`;
     // Filter illegal message first.
-    if (msg.toString() !== PROBE_MESSAGE) return;
-
-    // Safe check.
-    const state = this.getState();
-    const socket: UdpSocket | undefined = this.getSocket();
-    if (!socket || state !== ServerState.Listening) {
-      const messge = `The ${this.getArrowedName()} broadcast server not running.`;
-      this.logger.error(messge);
-      throw new Error(messge);
+    const lenPrefix = PROBE_MESSAGE.length + 2; // Plus `->`
+    const prefix = msg.subarray(0, lenPrefix).toString();
+    if (prefix !== PROBE_MESSAGE + "->") {
+      this.logger.silly(`Non-discovery message received from ${peerInfo}.`);
+      return;
     }
 
     // Create distributed tracing span for the broadcast request
-    const correlationId = generateCorrelationId();
-    const discoverySpan = OtelTracing.createBroadcastSpan("discovery_request", {
-      message: "service_probe",
-      address: rinfo.address,
-      port: rinfo.port,
-      direction: "inbound",
-      attributes: {
-        "correlation.id": correlationId,
-        "network.broadcast.source": `${rinfo.address}:${rinfo.port}`,
+    const socket: UdpSocket = this.getReadySocket();
+    const correlationId = msg.subarray(lenPrefix).toString();
+    const discoverySpan = OtelTracing.createBroadcastSpan(
+      "discovery_broadcast",
+      {
+        message: msg.toString(),
+        address: rinfo.address,
+        port: rinfo.port,
+        direction: NetworkDirection.In,
+        attributes: {
+          "correlation.id": correlationId,
+          "network.broadcast.source": `${rinfo.address}:${rinfo.port}`,
+        },
       },
-    });
+    );
 
     const startTime = Date.now();
-
     try {
       // Doing things for the accepted message.
-      const sender = `<${rinfo.address}:${rinfo.port}>`;
-      this.logger.debug(`Received broadcast from ${sender}`);
+      this.logger.debug(`Received broadcast from ${peerInfo}`);
       super.handleMessage(msg, rinfo);
 
       // Record metrics
@@ -157,7 +149,7 @@ export class BroadcastUdpServer extends UdpServer {
         const responseTime = Date.now() - startTime;
 
         if (err) {
-          this.logger.error(`Error sending response to ${sender}: ${err}`);
+          this.logger.error(`Error sending response to ${peerInfo}: ${err}`);
           discoverySpan.recordException(err);
           discoverySpan.setStatus({
             code: 2, // ERROR
@@ -176,7 +168,7 @@ export class BroadcastUdpServer extends UdpServer {
           });
 
           this.logger.debug(
-            `Responded ${this._responseBuffer.length} bytes to ${sender}`,
+            `Responded ${this._responseBuffer.length} bytes to ${peerInfo}`,
           );
 
           discoverySpan.setStatus({

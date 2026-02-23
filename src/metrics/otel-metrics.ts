@@ -8,9 +8,14 @@ import {
   ObservableResult,
 } from "@opentelemetry/api";
 import { MeterProvider } from "@opentelemetry/sdk-metrics";
+import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import {
+  ATTR_SERVICE_INSTANCE,
+  ATTR_SERVICE_STATE,
+} from "../metrics/otel-tracing";
 import {
   MeterType,
-  ServerState,
+  ExecutionState,
   UNKNOWN_ATTRIBUTE,
 } from "../types/basal-protocol";
 
@@ -78,16 +83,16 @@ export const netMeter = metrics.getMeter(MeterType.Network);
  * Server state numeric mapping for metrics reporting.
  * Maps ServerState enum to numeric values for OpenTelemetry gauges.
  */
-export const ServerStateValues: Record<ServerState, number> = {
-  [ServerState.Error]: 0,
-  [ServerState.Halt]: 35,
-  [ServerState.Halting]: 30,
-  [ServerState.Listening]: 25,
-  [ServerState.Retrying]: 15,
-  [ServerState.Running]: 20,
-  [ServerState.Starting]: 10,
-  [ServerState.Stopping]: 40,
-  [ServerState.Stopped]: 45,
+export const ServerStateValues: Record<ExecutionState, number> = {
+  [ExecutionState.Error]: 0,
+  [ExecutionState.Halt]: 35,
+  [ExecutionState.Halting]: 30,
+  [ExecutionState.Listening]: 25,
+  [ExecutionState.Retrying]: 15,
+  [ExecutionState.Running]: 20,
+  [ExecutionState.Starting]: 10,
+  [ExecutionState.Stopping]: 40,
+  [ExecutionState.Stopped]: 45,
 };
 
 /**
@@ -120,7 +125,7 @@ export const ServerStateValues: Record<ServerState, number> = {
  * ```
  */
 export class ServerStateMetric {
-  private static _state: ServerState = ServerState.Stopped;
+  private static _state: ExecutionState = ExecutionState.Stopped;
   private static _serviceName: string = UNKNOWN_ATTRIBUTE;
   private static _serviceId: string = UNKNOWN_ATTRIBUTE;
 
@@ -131,7 +136,7 @@ export class ServerStateMetric {
    * @param serviceId - The service instance ID for metric attributes.
    */
   public static setInstanceState(
-    state: ServerState,
+    state: ExecutionState,
     serviceName: string,
     serviceId: string,
   ): void {
@@ -144,7 +149,7 @@ export class ServerStateMetric {
    * Sets the current server state.
    * @param state - The new server state.
    */
-  public static setState(state: ServerState): void {
+  public static setState(state: ExecutionState): void {
     this._state = state;
   }
 
@@ -152,7 +157,7 @@ export class ServerStateMetric {
    * Gets the current server state.
    * @returns The current server state.
    */
-  public static getState(): ServerState {
+  public static getState(): ExecutionState {
     return this._state;
   }
 
@@ -179,9 +184,9 @@ export class ServerStateMetric {
   public static createCallback(): ObservableCallback {
     return (observable: ObservableResult) => {
       observable.observe(ServerStateValues[this._state], {
-        "service.name": this._serviceName,
-        "service.instance.id": this._serviceId,
-        state: this._state,
+        [ATTR_SERVICE_NAME]: this._serviceName,
+        [ATTR_SERVICE_INSTANCE]: this._serviceId,
+        [ATTR_SERVICE_STATE]: this._state,
       });
     };
   }

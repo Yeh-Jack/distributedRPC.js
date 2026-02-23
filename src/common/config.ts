@@ -3,7 +3,12 @@ import * as path from "path";
 import yaml from "js-yaml";
 import { inject, injectable } from "inversify";
 import { LogFormat } from "./logger";
-import { AppEnv, getAppEnv, UNKNOWN_ATTRIBUTE } from "../types/basal-protocol";
+import {
+  AppEnv,
+  ServiceManagerDiscovery,
+  getAppEnv,
+  UNKNOWN_ATTRIBUTE,
+} from "../types/basal-protocol";
 
 export const DEFAULT_DISCOVERY_PORT = 5707;
 export const DEFAULT_RETRY_MULTIPLIER = 2;
@@ -27,6 +32,7 @@ export interface AppConfig {}
  */
 export interface CoreConfig {
   net: {
+    sm_discovery: symbol;
     tcp_address: string;
     tcp_port: number;
     udp_address: string;
@@ -166,6 +172,10 @@ export class ConfigManager<
     return this.getConfig().app;
   }
 
+  public getAppEnv(): AppEnv {
+    return getAppEnv();
+  }
+
   /**
    * Retrieves the core configuration object from the overall configuration.
    *
@@ -205,18 +215,19 @@ export class ConfigManager<
   }
 
   protected getDefaultCoreConfig(): T_Core {
-    const NIC_ADDRESS = "0.0.0.0";
+    const NIC_ADDRESS = "0.0.0.0"; // Bind on all NICs.
     const SECOND = 1000;
     return {
       net: {
+        sm_discovery: ServiceManagerDiscovery.UDP,
         tcp_address: NIC_ADDRESS,
-        tcp_port: 0,
+        tcp_port: 0, // Random allocated.
         udp_address: NIC_ADDRESS,
         udp_port: DEFAULT_DISCOVERY_PORT,
       },
       retry: {
         interval: 2 * SECOND,
-        max_try: 0,
+        max_try: 0, // Infinity.
         backoff: {
           max_delay: 4 * 60 * SECOND, // 4 minutes.
           multiplier: DEFAULT_RETRY_MULTIPLIER,

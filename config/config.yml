@@ -7,6 +7,7 @@ app:
 # core:
 #   service_name: ServiceManager
 #   net:
+#     sm_discovery: UdpDiscovery
 #     tcp_address: 0.0.0.0
 #     tcp_port: 0
 #     udp_address: 0.0.0.0
@@ -20,7 +21,7 @@ app:
 #     max_try: 0
 
 log:
-  log_level: debug
+  log_level: silly
 #   format: console
 #   max_files: 14d
 #   max_size: 20m

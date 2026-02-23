@@ -7,7 +7,11 @@ export const TYPES = {
   ConfigManager: Symbol.for("ConfigManager"),
   LoggerManager: Symbol.for("LoggerManager"),
   Logger: Symbol.for("Logger"),
+  None: Symbol.for("None"),
   ServiceManager: Symbol.for("ServiceManager"),
+  ServiceProvider: Symbol.for("ServiceProvider"),
   TcpServer: Symbol.for("TcpServer"),
+  UdpClient: Symbol.for("UdpClient"),
+  UdpDiscovery: Symbol.for("UdpDiscovery"),
   UdpServer: Symbol.for("UdpServer"),
 };

@@ -6,6 +6,8 @@
 import "reflect-metadata";
 import { Container } from "inversify";
 import { Logger } from "winston";
+import { ConsoleSpanExporter } from "@opentelemetry/sdk-trace-node";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc";
 
 import { TYPES } from "./di-types";
 import { ConfigManager } from "../common/config";
@@ -15,8 +17,12 @@ import { instrumentService } from "../aop/exec-time-interceptor";
 
 import { BroadcastUdpServer } from "../network/broadcast-udp-server";
 import { ServiceManager } from "../manager/service-manager";
+import { ServiceProvider } from "../provider/service-provider";
 import { TcpServer } from "../network/tcp-server";
+import { UdpClient } from "../network/udp-client";
+import { UdpDiscovery } from "../network/udp-discovery";
 import { UdpServer } from "../network/udp-server";
+import { AppEnv } from "../types/basal-protocol";
 
 export { TYPES };
 
@@ -72,6 +78,36 @@ export function createNamedUdpServer(
 }
 
 /**
+ * Create OpenTelemetry exporter instance based on runtime envieonment.
+ * Returns `ConsoleSpanExporter` if it's `development`, otherwise returns
+ * `OTLPTraceExporter` instead.
+ */
+export function createOtelExporter() {
+  const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
+  if (AppEnv.development === configManager.getAppEnv()) {
+    return new ConsoleSpanExporter();
+  } else {
+    const args = {
+      url: "http://localhost:4317",
+    };
+    return new OTLPTraceExporter(args);
+  }
+}
+
+export function createServiceManagerDiscover(
+  name: string,
+  type: Symbol,
+): UdpDiscovery | undefined {
+  if (type === TYPES.UdpDiscovery) {
+    const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
+    const loggerManager = container.get<LoggerManager>(TYPES.LoggerManager);
+    return new UdpDiscovery(configManager, loggerManager, name);
+  }
+
+  return undefined;
+}
+
+/**
  * Helper function to access the container within closures.
  * Required because Inversify's resolution context doesn't expose the container directly.
  */
@@ -112,7 +148,22 @@ container.bind<TcpServer>(TYPES.TcpServer).to(TcpServer);
 // Bind UdpServer
 container.bind<UdpServer>(TYPES.UdpServer).to(UdpServer);
 
+// Bind UdpClient
+container.bind<UdpClient>(TYPES.UdpClient).to(UdpClient);
+
+// Bind UdpDiscovery
+container.bind<UdpDiscovery>(TYPES.UdpDiscovery).to(UdpDiscovery);
+
 // Service with DI-compatible instrumentation
+container
+  .bind<ServiceProvider>(TYPES.ServiceProvider)
+  .to(ServiceProvider)
+  .onActivation((_ctx, instance) => {
+    const container = getContainer();
+    const metrics = container.get(ExecutionMetrics);
+    return instrumentService(instance, metrics);
+  });
+
 container
   .bind<ServiceManager>(TYPES.ServiceManager)
   .to(ServiceManager)

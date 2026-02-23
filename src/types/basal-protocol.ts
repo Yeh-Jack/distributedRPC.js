@@ -73,6 +73,24 @@ export interface BroadcastResponse {
 }
 
 /**
+ * State of execution.
+ *
+ * @public
+ * @enum {string}
+ */
+export enum ExecutionState {
+  Error = "Error",
+  Halt = "Halt",
+  Halting = "Halting",
+  Listening = "Listening",
+  Retrying = "Retrying",
+  Running = "Running",
+  Starting = "Starting",
+  Stopping = "Stopping",
+  Stopped = "Stopped",
+}
+
+/**
  * Types of meters for OpenTelemetry.
  *
  * @public
@@ -85,22 +103,15 @@ export enum MeterType {
 }
 
 /**
- * State of the server.
+ * Types of meters for OpenTelemetry.
  *
  * @public
  * @enum {string}
  */
-export enum ServerState {
-  Error = "Error",
-  Halt = "Halt",
-  Halting = "Halting",
-  Listening = "Listening",
-  Retrying = "Retrying",
-  Running = "Running",
-  Starting = "Starting",
-  Stopping = "Stopping",
-  Stopped = "Stopped",
-}
+export const ServiceManagerDiscovery = {
+  None: Symbol.for("None"),
+  UDP: Symbol.for("UdpDiscovery"),
+};
 
 /**
  * Simple ID generator which creates 8 bytes of Timestamp (seconds) and 8 bytes of Randomness.

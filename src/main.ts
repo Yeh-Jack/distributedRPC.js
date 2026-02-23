@@ -8,10 +8,11 @@ import "reflect-metadata";
 import { container } from "./aop/container";
 import { TYPES } from "./aop/di-types";
 import { ServiceManager } from "./manager/service-manager";
+import { ServiceProvider } from "./provider/service-provider";
 
 const INTERRUPT_KEY = "<Ctrl+C>";
 
-function handleInterruption(provider: ServiceManager, logger: any) {
+function handleInterruption(provider: ServiceProvider, logger: any) {
   const providerName = provider.getServiceName();
 
   // Handle graceful shutdown for <Ctrl+C>.
@@ -53,7 +54,9 @@ function handleInterruption(provider: ServiceManager, logger: any) {
  */
 async function main(): Promise<void> {
   const logger = container.get<any>(TYPES.Logger);
-  const provider = container.get<ServiceManager>(TYPES.ServiceManager);
+  const manager = container.get<ServiceManager>(TYPES.ServiceManager);
+  const managerName = manager.getServiceName();
+  const provider = container.get<ServiceProvider>(TYPES.ServiceProvider);
   const providerName = provider.getServiceName();
 
   handleInterruption(provider, logger);
@@ -61,17 +64,17 @@ async function main(): Promise<void> {
 
   try {
     const startTime = process.hrtime.bigint();
-    await provider.start();
+    await Promise.all([manager.start(), provider.start()]);
     const elapsedNs = process.hrtime.bigint() - startTime;
     const elapsedMs = Number(elapsedNs) / 1_000_000;
     logger.info(
-      `${providerName} has been started successfully in ${elapsedMs.toFixed(
+      `${managerName} and ${providerName} has been started successfully in ${elapsedMs.toFixed(
         2,
       )} ms.`,
     );
     logger.info(`Press ${INTERRUPT_KEY} to stop`);
   } catch (error) {
-    console.error(`Critical error in main application: ${error}`);
+    console.error(`Critical error catched in main application: `, error);
     process.exit(1);
   }
 }

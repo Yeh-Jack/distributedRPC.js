@@ -5,8 +5,7 @@
 
 import "reflect-metadata";
 
-import { container } from "./aop/container";
-import { TYPES } from "./aop/di-types";
+import { container, createProvider } from "./aop/container";
 import { ServiceManager } from "./manager/service-manager";
 import { ServiceProvider } from "./provider/service-provider";
 import { ConfigManager } from "./common/config";
@@ -54,18 +53,17 @@ function handleInterruption(provider: ServiceProvider, logger: any) {
  * ```
  */
 async function main(): Promise<void> {
-  const config=new ConfigManager();
-  const core=config.getCoreConfig();
-  core.service_name="Main";
+  const config = new ConfigManager("Main");
   const logger = config.getLogger();
+  logger.info(`Starting the application ...`);
 
-  const manager = container.get<ServiceManager>(TYPES.ServiceManager);
+  const manager = await createProvider(ServiceManager);
   const managerName = manager.getServiceName();
-  const provider = container.get<ServiceProvider>(TYPES.ServiceProvider);
+  const provider = await createProvider(ServiceProvider);
   const providerName = provider.getServiceName();
 
   handleInterruption(provider, logger);
-  logger.info(`Starting ${providerName} application ...`);
+  logger.info(`${managerName} and ${providerName} instances are constructed.`);
 
   try {
     const startTime = process.hrtime.bigint();

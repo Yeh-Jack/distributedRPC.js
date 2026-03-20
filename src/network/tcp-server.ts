@@ -21,18 +21,15 @@ import {
   tcpDataTransferSize,
 } from "../metrics/otel-metrics";
 import {
+  NetworkDirection,
   NetworkEvent,
   NetworkEventMap,
   NetworkPeer,
   NetworkProtocol,
   NetworkRetryable,
 } from "./network-events";
-import {
-  NetworkDirection,
-  NetworkSpanOptions,
-  OtelTracing,
-  generateCorrelationId,
-} from "../metrics/otel-tracing";
+import { generateCorrelationId } from "../metrics/otel-resource";
+import { NetworkSpanOptions, OtelTracer } from "../metrics/otel-tracing";
 
 /**
  * This class provides a robust, event-driven TCP server implementation specifically designed
@@ -305,7 +302,9 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
         "network.target": `${address}:${port}`,
       },
     };
-    const connectionSpan = OtelTracing.createNetworkSpan("accept", spanOptions);
+    const providerId = this.configManager.getProviderId();
+    const tracer = OtelTracer.getInstance(providerId);
+    const connectionSpan = tracer.createNetworkSpan("accept", spanOptions);
 
     this._sockets.add(socket); // Tracking the socket.
     activeConnections.add(1, connectionInfo); // Update connection metrics for OpenTelemetry.
@@ -334,7 +333,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
             "network.event": "data_received",
           },
         };
-        const dataHandlingSpan = OtelTracing.createNetworkSpan(
+        const dataHandlingSpan = tracer.createNetworkSpan(
           "handle_data",
           spanOptions,
         );
@@ -344,7 +343,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
           this.handleData.apply(this, [peer, data.toString(), connectionInfo]);
           dataHandlingSpan.setStatus({ code: 1 }); // OK
         } catch (error) {
-          OtelTracing.recordException(dataHandlingSpan, error as Error);
+          tracer.recordException(dataHandlingSpan, error as Error);
           dataHandlingSpan.setStatus({
             code: 2, // ERROR
             message: (error as Error).message,
@@ -405,7 +404,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
         correlation_id: correlationId,
       });
 
-      OtelTracing.recordException(connectionSpan, err, {
+      tracer.recordException(connectionSpan, err, {
         "error.code": nodeError.code,
         "error.message": err.message,
       });

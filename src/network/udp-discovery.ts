@@ -10,12 +10,9 @@ import { injectable } from "inversify";
 import { ConfigManager, DEFAULT_DISCOVERY_PORT } from "../common/config";
 import { SendOptions, UdpClient } from "./udp-client";
 import { BroadcastResponse, PROBE_MESSAGE } from "../types/basal-protocol";
-import {
-  NetworkDirection,
-  NetworkSpanOptions,
-  OtelTracing,
-  generateCorrelationId,
-} from "../metrics/otel-tracing";
+import { generateCorrelationId } from "../metrics/otel-resource";
+import { NetworkSpanOptions, OtelTracer } from "../metrics/otel-tracing";
+import { NetworkDirection } from "./network-events";
 import {
   udpBroadcastRequests,
   udpBroadcastResponses,
@@ -150,12 +147,13 @@ export class UdpDiscovery extends UdpClient {
       direction: NetworkDirection.Out,
       attributes: {
         "correlation.id": correlationId,
-        "network.broadcast.target": `${address}:${port}`,
         "discovery.timeout": timeout,
         "discovery.max_responses": maxResponses,
       },
     };
-    const discoverySpan = OtelTracing.createBroadcastSpan(
+    const providerId = this.configManager.getProviderId();
+    const tracer = OtelTracer.getInstance(providerId);
+    const discoverySpan = tracer.createBroadcastSpan(
       "discover_manager",
       spanOptions,
     );

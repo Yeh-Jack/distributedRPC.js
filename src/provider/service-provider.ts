@@ -1,7 +1,5 @@
-import { Server } from "net";
 import { injectable } from "inversify";
 import { DetectedResourceAttributes } from "@opentelemetry/resources";
-import { ObservableCallback } from "@opentelemetry/api";
 import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
@@ -23,19 +21,17 @@ import {
 } from "../aop/container";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
-import {
-  OtelMeterics,
-  listenerState,
-  ServerStateMetric,
-} from "../metrics/otel-metrics";
-import {
-  OtelTracer,
-  TracingConfig,
-  ATTR_PROTOCOL_VERSION,
-  ATTR_SERVICE_INSTANCE,
-} from "../metrics/otel-tracing";
+import { OtelMeterics, OtelProviderState } from "../metrics/otel-metrics";
+import { OtelTracer } from "../metrics/otel-tracing";
 import { NetworkProtocol, getHostIP } from "../network/network-events";
 import { TcpServer } from "../network/tcp-server";
+import {
+  ProviderState,
+  ProviderInfo,
+  ATTR_DEPLOY_ENV,
+  ATTR_PROTOCOL_VERSION,
+  ATTR_SERVICE_INSTANCE,
+} from "./provider-info";
 
 @injectable()
 export class ServiceProvider {
@@ -53,28 +49,36 @@ export class ServiceProvider {
   protected logger!: ReturnType<LoggerManager["getLogger"]>;
   protected tasks: Map<string, any> = new Map(); // Internal tasks handler.
 
+  // Resources should be released during shutdown.
+  protected metrics!: OtelMeterics;
+  protected tracer!: OtelTracer;
+
   private readonly _FOLLOW_UP: string = "  --> ";
   private _initialized: boolean = false;
-  private _serviceManager: BroadcastResponse[] | null = [];
-  private _state: ExecutionState = ExecutionState.Stopped;
-
-  // Resources should be released during shutdown.
-  private _metrics!: OtelMeterics;
-  private _metricsCallback?: ObservableCallback;
+  private _managerInfo: BroadcastResponse[] | null = [];
+  private _providerState!: ProviderState;
 
   /**
    * Creates a ServiceProvider instance.
    */
-  public constructor() {
-    const config = new ConfigManager();
-    this.configManager = config;
-    this.logger = config.getLogger();
-    this.reload();
-  }
+  public constructor() {}
 
   // This is the "Destructor"
   [Symbol.dispose]() {
     this.shutdown();
+  }
+
+  protected collectProviderInfo(): ProviderInfo {
+    const provider = this.PROTOCOL.provider;
+    const resource: ProviderInfo = {
+      enabled: true,
+      [ATTR_SERVICE_NAME]: provider.name,
+      [ATTR_SERVICE_INSTANCE]: provider.id,
+      [ATTR_SERVICE_VERSION]: provider.version,
+      [ATTR_PROTOCOL_VERSION]: this.PROTOCOL.protocol_ver,
+      [ATTR_DEPLOY_ENV]: getAppEnv() || AppEnv.development,
+    };
+    return resource;
   }
 
   /**
@@ -109,18 +113,24 @@ export class ServiceProvider {
    * @returns The OtelMeterics instance.
    */
   public getMetrics(): OtelMeterics {
-    return this._metrics;
+    return this.metrics;
   }
 
-  protected getOtelTracerConfig(): TracingConfig {
-    const provider = this.PROTOCOL.provider;
-    const traceConfig: TracingConfig = {
-      enabled: true,
-      [ATTR_SERVICE_NAME]: provider.name,
-      [ATTR_SERVICE_INSTANCE]: provider.id,
-      [ATTR_SERVICE_VERSION]: provider.version,
-    };
-    return traceConfig;
+  protected getServiceManagerInfo(): BroadcastResponse[] | null {
+    return this._managerInfo;
+  }
+
+  /**
+   * Returns the configured service name.
+   *
+   * @returns The service name from configuration.
+   */
+  public getServiceName(): string {
+    return this.PROTOCOL.provider.name;
+  }
+
+  public getState(): ExecutionState {
+    return this._providerState.getState();
   }
 
   protected getTcpServerInfo(tcpServerName: string = "response"): AccessPoint {
@@ -148,19 +158,6 @@ export class ServiceProvider {
       protocol: NetworkProtocol.TCP, // Network protocol of the access point.
     };
     return this.buildAccessPointInfo(srvInfo);
-  }
-
-  protected getServiceManager(): BroadcastResponse[] | null {
-    return this._serviceManager;
-  }
-
-  /**
-   * Returns the configured service name.
-   *
-   * @returns The service name from configuration.
-   */
-  public getServiceName(): string {
-    return this.PROTOCOL.provider.name;
   }
 
   /**
@@ -193,11 +190,13 @@ export class ServiceProvider {
    * @returns Promise that resolves when reload is complete.
    */
   public async reload(): Promise<void> {
-    // The ConfigManager and LoggerManager should be singletons.
     if (this.configManager) {
       this.configManager.reload();
-      this._setConfigManager(this.configManager);
+    } else {
+      const providerName = this.PROTOCOL.provider.name;
+      this.configManager = new ConfigManager(providerName);
     }
+    this._setConfigManager(this.configManager);
 
     this.logger.silly(`Reloading in subclass ...`);
     await this.reloading();
@@ -211,31 +210,24 @@ export class ServiceProvider {
    */
   public async restart(): Promise<void> {
     await this.stop();
-
     await this._releaseResources();
-    await this._initializeResources();
 
     await this.reload();
     await this.start();
   }
 
   /**
-   * Sets the server state and updates the OpenTelemetry metric.
+   * Sets the server state.
    *
    * @param state - The new server state to set.
-   * @remarks
-   * This method updates both the internal state and the OpenTelemetry observable gauge.
-   * The state change is logged and the metric is updated via the ServerStateMetric class.
    */
   protected setState(state: ExecutionState): void {
-    if (this._state !== state) {
-      // Update the server state metric for OpenTelemetry
-      ServerStateMetric.setState(state);
-
+    const curState = this.getState();
+    if (curState !== state) {
+      this._providerState.setState(state);
       this.logger.info(
-        `${this.getArrowedIdentity()} state: ${this._state} → ${state}.`,
+        `${this.getArrowedIdentity()} state: ${curState} → ${state}.`,
       );
-      this._state = state;
     }
   }
 
@@ -277,7 +269,7 @@ export class ServiceProvider {
    * @returns Promise that resolves when all services have stopped.
    */
   public async stop(): Promise<void> {
-    if (this._state === ExecutionState.Stopped) return;
+    if (this.getState() === ExecutionState.Stopped) return;
     this.logger.info(`Stopping the ${this.getArrowedIdentity()} service ...`);
     this.setState(ExecutionState.Stopping);
 
@@ -379,41 +371,39 @@ export class ServiceProvider {
       discoveryConfig,
     );
     if (!discovery) {
-      this._serviceManager = null;
+      this._managerInfo = null;
       return;
     }
 
     this.tasks.set(discoveryName, discovery);
-    this._serviceManager = (await discovery.discover()).responses;
+    this._managerInfo = (await discovery.discover()).responses;
   }
 
   private async _initializeOtel(): Promise<void> {
-    //Configure OpenTelemetry tracer.
-    OtelTracer.initialize(this.getOtelTracerConfig());
+    // Use OtelProviderState instead of the default ProviderState.
+    const providerInfo = this._providerState.getProvider();
+    let otelProvider: OtelProviderState;
+    if (this._providerState instanceof OtelProviderState) {
+      otelProvider = this._providerState;
+    } else {
+      // Replace the default ProviderState instance by OtelProviderState instance.
+      const state = this._providerState.getState();
+      otelProvider = new OtelProviderState(providerInfo);
+      otelProvider.setState(state);
+      this._providerState = otelProvider;
+    }
 
-    // Configure OpenTelemetry metrics.
-    const provider = this.PROTOCOL.provider;
-    const resourceAttr: DetectedResourceAttributes = {
-      [ATTR_SERVICE_NAME]: provider.name,
-      [ATTR_SERVICE_INSTANCE]: provider.id,
-      [ATTR_SERVICE_VERSION]: provider.version,
-      [ATTR_PROTOCOL_VERSION]: this.PROTOCOL.protocol_ver,
-      "deployment.environment": getAppEnv() || AppEnv.development,
-    };
-    this._metrics = new OtelMeterics(resourceAttr);
+    const providerId = this.configManager.getProviderId();
+    this.tracer = OtelTracer.getInstance(providerId, otelProvider);
 
-    this._metricsCallback = ServerStateMetric.createCallback();
-    listenerState.addCallback(this._metricsCallback);
-
-    ServerStateMetric.setInstanceState(
-      ExecutionState.Stopped,
-      provider.name,
-      provider.id,
-    );
+    const { enabled, ...info } = providerInfo;
+    const resourceAttr: DetectedResourceAttributes = { ...info };
+    this.metrics = new OtelMeterics(resourceAttr, otelProvider);
   }
 
   private async _initializeResources(): Promise<void> {
     this.logger.debug(`Initializing ${this.getArrowedIdentity()} ...`);
+    this.setState(ExecutionState.Initializing);
 
     await this._initializeOtel();
     await this._discoverServiceManager();
@@ -427,14 +417,9 @@ export class ServiceProvider {
   }
 
   private async _releaseMetrics(): Promise<void> {
-    if (this._metrics) {
-      await this._metrics.shutdown();
-      this._metrics = undefined as unknown as OtelMeterics;
-    }
-
-    if (this._metricsCallback) {
-      listenerState.removeCallback(this._metricsCallback);
-      this._metricsCallback = undefined;
+    if (this.metrics) {
+      await this.metrics.shutdown();
+      this.metrics = undefined as unknown as OtelMeterics;
     }
   }
 
@@ -464,11 +449,21 @@ export class ServiceProvider {
   private _setConfigManager(configManager: ConfigManager) {
     this.configManager = configManager;
     this.logger = configManager.getLogger();
-    this._updateServiceName();
+    this._updateProviderInfo();
+
+    const providerInfo = this.collectProviderInfo();
+    if (!this._providerState) {
+      this._providerState = new ProviderState(providerInfo);
+    } else {
+      this._providerState.setProvider(providerInfo);
+    }
   }
 
-  private _updateServiceName() {
+  private _updateProviderInfo() {
+    // Synchronize provider's instance ID.
     const coreConfig = this.configManager.getCoreConfig();
+    coreConfig.provider_id = this.PROTOCOL.provider.id;
+
     const svcName = coreConfig.service_name;
     if (svcName && svcName !== UNKNOWN_ATTRIBUTE) {
       // If service name is defined in config file, use it.

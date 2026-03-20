@@ -17,6 +17,11 @@ export const NetworkRetryable = new Set([
   "ENETDOWN",
 ]);
 
+export enum NetworkDirection {
+  In = "inbound",
+  Out = "outbound",
+}
+
 /**
  * Network events emitted by servers and connections.
  */

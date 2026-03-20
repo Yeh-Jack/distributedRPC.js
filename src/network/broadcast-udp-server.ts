@@ -8,10 +8,10 @@ import { Socket as UdpSocket, RemoteInfo } from "dgram";
 import { injectable } from "inversify";
 
 import { ConfigManager } from "../common/config";
-import { LoggerManager } from "../common/logger";
 import { UdpServer } from "../network/udp-server";
 import { BroadcastResponse, PROBE_MESSAGE } from "../types/basal-protocol";
-import { NetworkDirection, OtelTracing } from "../metrics/otel-tracing";
+import { OtelTracer } from "../metrics/otel-tracing";
+import { NetworkDirection } from "./network-events";
 import {
   udpBroadcastRequests,
   udpBroadcastResponses,
@@ -116,19 +116,17 @@ export class BroadcastUdpServer extends UdpServer {
     // Create distributed tracing span for the broadcast request
     const socket: UdpSocket = this.getReadySocket();
     const correlationId = msg.subarray(lenPrefix).toString();
-    const discoverySpan = OtelTracing.createBroadcastSpan(
-      "discovery_broadcast",
-      {
-        message: msg.toString(),
-        address: rinfo.address,
-        port: rinfo.port,
-        direction: NetworkDirection.In,
-        attributes: {
-          "correlation.id": correlationId,
-          "network.broadcast.source": `${rinfo.address}:${rinfo.port}`,
-        },
+    const providerId = this.configManager.getProviderId();
+    const tracer = OtelTracer.getInstance(providerId);
+    const discoverySpan = tracer.createBroadcastSpan("discovery_received", {
+      message: msg.toString(),
+      address: rinfo.address,
+      port: rinfo.port,
+      direction: NetworkDirection.In,
+      attributes: {
+        "correlation.id": correlationId,
       },
-    );
+    });
 
     const startTime = Date.now();
     try {

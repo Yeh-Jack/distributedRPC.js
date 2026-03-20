@@ -82,6 +82,7 @@ export enum ExecutionState {
   Error = "Error",
   Halt = "Halt",
   Halting = "Halting",
+  Initializing = "Initializing",
   Listening = "Listening",
   Retrying = "Retrying",
   Running = "Running",

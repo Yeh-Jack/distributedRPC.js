@@ -1,23 +1,27 @@
 import {
+  metrics,
+  Counter,
+  Histogram,
+  Meter,
+  ObservableCallback,
+  ObservableGauge,
+  ObservableResult,
+  UpDownCounter,
+} from "@opentelemetry/api";
+import {
   DetectedResourceAttributes,
   resourceFromAttributes,
 } from "@opentelemetry/resources";
-import {
-  metrics,
-  ObservableCallback,
-  ObservableResult,
-} from "@opentelemetry/api";
 import { MeterProvider } from "@opentelemetry/sdk-metrics";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+
+import { MeterType } from "../types/basal-protocol";
+import { ServerStateValues } from "../metrics/otel-resource";
 import {
+  ProviderState,
   ATTR_SERVICE_INSTANCE,
   ATTR_SERVICE_STATE,
-} from "../metrics/otel-tracing";
-import {
-  MeterType,
-  ExecutionState,
-  UNKNOWN_ATTRIBUTE,
-} from "../types/basal-protocol";
+} from "../provider/provider-info";
 
 /**
  * OpenTelemetry metrics module for distributed RPC.
@@ -28,7 +32,7 @@ import {
 /**
  * Meter instance for application-level metrics.
  */
-export const appMeter = metrics.getMeter(MeterType.Application);
+const _appMeter = metrics.getMeter(MeterType.Application);
 
 /**
  * Histogram for measuring service method execution time.
@@ -38,10 +42,13 @@ export const appMeter = metrics.getMeter(MeterType.Application);
  * executionTime.record(150, { method: 'processRequest', service: 'user-service' });
  * ```
  */
-export const executionTime = appMeter.createHistogram("method_execution_time", {
-  description: "Execution time of service methods",
-  unit: "ms",
-});
+export const executionTime = _appMeter.createHistogram(
+  "method_execution_time",
+  {
+    description: "Execution time of service methods",
+    unit: "ms",
+  },
+);
 
 /**
  * Counter tracking total retry attempts across all jobs.
@@ -54,7 +61,7 @@ export const executionTime = appMeter.createHistogram("method_execution_time", {
  * retryAttempts.add(1, { jobId: 'job-123', reason: 'timeout' });
  * ```
  */
-export const retryAttempts = appMeter.createCounter("retry_attempts_total", {
+export const retryAttempts = _appMeter.createCounter("retry_attempts_total", {
   description: "Total retry attempts of a job",
 });
 
@@ -69,128 +76,10 @@ export const retryAttempts = appMeter.createCounter("retry_attempts_total", {
  * retryDuration.record(500, { jobId: 'job-123', attempt: 2 });
  * ```
  */
-export const retryDuration = appMeter.createHistogram("retry_duration", {
+export const retryDuration = _appMeter.createHistogram("retry_duration", {
   description: "Retry duration of a job",
   unit: "ms",
 });
-
-/**
- * Meter instance for network-level metrics.
- */
-export const netMeter = metrics.getMeter(MeterType.Network);
-
-/**
- * Server state numeric mapping for metrics reporting.
- * Maps ServerState enum to numeric values for OpenTelemetry gauges.
- */
-export const ServerStateValues: Record<ExecutionState, number> = {
-  [ExecutionState.Error]: 0,
-  [ExecutionState.Halt]: 35,
-  [ExecutionState.Halting]: 30,
-  [ExecutionState.Listening]: 25,
-  [ExecutionState.Retrying]: 15,
-  [ExecutionState.Running]: 20,
-  [ExecutionState.Starting]: 10,
-  [ExecutionState.Stopping]: 40,
-  [ExecutionState.Stopped]: 45,
-};
-
-/**
- * OpenTelemetry observable gauge for tracking server state transitions.
- *
- * This class provides a thread-safe mechanism for tracking and reporting server state
- * changes through OpenTelemetry's observable gauge functionality. It maintains current
- * state information and provides callback functions for metric reporting.
- *
- * Key Features:
- * - Thread-safe state management
- * - Automatic numeric state mapping for gauges
- * - Observable callback for OpenTelemetry integration
- * - Service identification tracking
- *
- * @remarks
- * This class is used in conjunction with OpenTelemetry's MeterProvider to create
- * observable gauges that report server state changes. The numeric mapping allows
- * for easy visualization of state transitions in monitoring dashboards.
- *
- * @example
- * ```typescript
- * // Update server state
- * ServerStateMetric.setState(ServerState.Listening, "UserService", "inst-1");
- *
- * // Create observable gauge
- * const gauge = meter.createObservableGauge("server_state", {
- *   callbacks: [ServerStateMetric.createCallback()],
- * });
- * ```
- */
-export class ServerStateMetric {
-  private static _state: ExecutionState = ExecutionState.Stopped;
-  private static _serviceName: string = UNKNOWN_ATTRIBUTE;
-  private static _serviceId: string = UNKNOWN_ATTRIBUTE;
-
-  /**
-   * Sets the server state for a specific service instance with name and ID.
-   * @param state - The new server state.
-   * @param serviceName - The service name for metric attributes.
-   * @param serviceId - The service instance ID for metric attributes.
-   */
-  public static setInstanceState(
-    state: ExecutionState,
-    serviceName: string,
-    serviceId: string,
-  ): void {
-    this._state = state;
-    this._serviceName = serviceName;
-    this._serviceId = serviceId;
-  }
-
-  /**
-   * Sets the current server state.
-   * @param state - The new server state.
-   */
-  public static setState(state: ExecutionState): void {
-    this._state = state;
-  }
-
-  /**
-   * Gets the current server state.
-   * @returns The current server state.
-   */
-  public static getState(): ExecutionState {
-    return this._state;
-  }
-
-  /**
-   * Gets the service name for metric attributes.
-   * @returns The service name.
-   */
-  public static getServiceName(): string {
-    return this._serviceName;
-  }
-
-  /**
-   * Gets the service ID for metric attributes.
-   * @returns The service ID.
-   */
-  public static getServiceId(): string {
-    return this._serviceId;
-  }
-
-  /**
-   * Creates an ObservableCallback for reporting server state to OpenTelemetry.
-   * @returns A callback function compatible with ObservableGauge.addCallback().
-   */
-  public static createCallback(): ObservableCallback {
-    return (observable: ObservableResult) => {
-      observable.observe(ServerStateValues[this._state], {
-        [ATTR_SERVICE_NAME]: this._serviceName,
-        [ATTR_SERVICE_INSTANCE]: this._serviceId,
-        [ATTR_SERVICE_STATE]: this._state,
-      });
-    };
-  }
-}
 
 /**
  * Observable gauge reporting the current server state.
@@ -203,25 +92,14 @@ export class ServerStateMetric {
  * ServerStateMetric.setState(ServerState.Running, 'my-service');
  * ```
  */
-export const serverState = netMeter.createObservableGauge("server_state", {
+export const serverState = _appMeter.createObservableGauge("server_state", {
   description: "Server state",
 });
 
 /**
- * Observable gauge reporting the current listener state.
- * @remarks
- * Monitors the status of network listeners (e.g., TCP ports), indicating
- * whether they are actively accepting connections.
- * @example
- * ```typescript
- * import { listenerState, ServerStateMetric } from './otel-metrics';
- * listenerState.addCallback(ServerStateMetric.createCallback());
- * ServerStateMetric.setState(ServerState.Listening, 'tcp-listener');
- * ```
+ * Meter instance for network-level metrics.
  */
-export const listenerState = netMeter.createObservableGauge("listener_state", {
-  description: "Listener state",
-});
+const _netMeter = metrics.getMeter(MeterType.Network);
 
 /**
  * UpDownCounter tracking active TCP connections.
@@ -234,7 +112,7 @@ export const listenerState = netMeter.createObservableGauge("listener_state", {
  * activeConnections.add(1, { direction: 'inbound' });
  * ```
  */
-export const activeConnections = netMeter.createUpDownCounter(
+export const activeConnections = _netMeter.createUpDownCounter(
   "active_connections",
   { description: "Active TCP connections" },
 );
@@ -251,65 +129,26 @@ export const activeConnections = netMeter.createUpDownCounter(
  * bytesCounter.add(2048, { direction: 'received' });
  * ```
  */
-export const bytesCounter = appMeter.createCounter("bytes_total", {
+export const bytesCounter = _netMeter.createCounter("bytes_total", {
   description: "Total bytes sent and received",
   unit: "bytes",
 });
 
 /**
- * Counter tracking UDP broadcast requests received.
+ * Observable gauge reporting the current listener state.
  * @remarks
- * Monitors service discovery activity and UDP broadcast volume.
- * Useful for tracking how many services are discovering this service.
+ * Monitors the status of network listeners (e.g., TCP ports), indicating
+ * whether they are actively accepting connections.
  * @example
  * ```typescript
- * import { udpBroadcastRequests } from './otel-metrics';
- * udpBroadcastRequests.add(1, { service_type: 'discovery' });
+ * import { listenerState, ServerStateMetric } from './otel-metrics';
+ * listenerState.addCallback(ServerStateMetric.createCallback());
+ * ServerStateMetric.setState(ServerState.Listening, 'tcp-listener');
  * ```
  */
-export const udpBroadcastRequests = appMeter.createCounter(
-  "udp_broadcast_requests_total",
-  {
-    description: "Total UDP broadcast requests received",
-  },
-);
-
-/**
- * Counter tracking UDP broadcast responses sent.
- * @remarks
- * Monitors service discovery responses and broadcast response activity.
- * Tracks how many services we've responded to during discovery.
- * @example
- * ```typescript
- * import { udpBroadcastResponses } from './otel-metrics';
- * udpBroadcastResponses.add(1, { target_service: 'OrderService' });
- * ```
- */
-export const udpBroadcastResponses = appMeter.createCounter(
-  "udp_broadcast_responses_total",
-  {
-    description: "Total UDP broadcast responses sent",
-  },
-);
-
-/**
- * Histogram measuring UDP broadcast response time.
- * @remarks
- * Records the time taken to respond to UDP broadcast requests.
- * Useful for monitoring service discovery latency.
- * @example
- * ```typescript
- * import { udpBroadcastLatency } from './otel-metrics';
- * udpBroadcastLatency.record(5, { request_type: 'service_discovery' });
- * ```
- */
-export const udpBroadcastLatency = appMeter.createHistogram(
-  "udp_broadcast_response_time",
-  {
-    description: "Time to respond to UDP broadcast requests",
-    unit: "ms",
-  },
-);
+export const listenerState = _netMeter.createObservableGauge("listener_state", {
+  description: "Listener state",
+});
 
 /**
  * Histogram measuring TCP connection duration.
@@ -322,7 +161,7 @@ export const udpBroadcastLatency = appMeter.createHistogram(
  * tcpConnectionDuration.record(connectionDuration, { peer_address: clientAddress });
  * ```
  */
-export const tcpConnectionDuration = appMeter.createHistogram(
+export const tcpConnectionDuration = _netMeter.createHistogram(
   "tcp_connection_duration",
   {
     description: "Duration of TCP connections",
@@ -341,7 +180,7 @@ export const tcpConnectionDuration = appMeter.createHistogram(
  * tcpConnectionsFailed.add(1, { error_type: 'connection_refused', peer_address: clientAddress });
  * ```
  */
-export const tcpConnectionsFailed = appMeter.createCounter(
+export const tcpConnectionsFailed = _netMeter.createCounter(
   "tcp_connections_failed_total",
   {
     description: "Total failed TCP connection attempts",
@@ -359,7 +198,7 @@ export const tcpConnectionsFailed = appMeter.createCounter(
  * tcpDataTransferSize.record(dataSize, { transfer_type: 'request', direction: 'received' });
  * ```
  */
-export const tcpDataTransferSize = appMeter.createHistogram(
+export const tcpDataTransferSize = _netMeter.createHistogram(
   "tcp_data_transfer_size",
   {
     description: "Size of data transferred over TCP connections",
@@ -368,95 +207,269 @@ export const tcpDataTransferSize = appMeter.createHistogram(
 );
 
 /**
- * Utility class for managing OpenTelemetry meter providers and meters.
+ * Histogram measuring UDP broadcast response time.
  * @remarks
- * Provides static factory methods for creating meters and managing the global
- * meter provider instance. The constructor initializes a new MeterProvider
- * with the specified resource attributes and sets it as the global provider.
+ * Records the time taken to respond to UDP broadcast requests.
+ * Useful for monitoring service discovery latency.
  * @example
  * ```typescript
- * import { OtelMeterics, listenerState, ServerStateMetric } from './otel-metrics';
- *
- * // Initialize the global meter provider
- * new OtelMeterics({ serviceName: 'distributed-rpc' });
- *
- * // Register the state callback
- * listenerState.addCallback(ServerStateMetric.createCallback());
- *
- * // Update state
- * ServerStateMetric.setState(ServerState.Running, 'my-service');
+ * import { udpBroadcastLatency } from './otel-metrics';
+ * udpBroadcastLatency.record(5, { request_type: 'service_discovery' });
  * ```
  */
+export const udpBroadcastLatency = _netMeter.createHistogram(
+  "udp_broadcast_response_time",
+  {
+    description: "Time to respond to UDP broadcast requests",
+    unit: "ms",
+  },
+);
+
 /**
- * Centralized OpenTelemetry metrics initialization and management.
- *
- * This class provides a unified interface for initializing and managing OpenTelemetry
- * metrics within distributed RPC applications. It handles metric provider setup,
- * resource configuration, and provides access to pre-configured metrics.
- *
- * Key Features:
- * - Automatic metric provider initialization
- * - Resource detection and configuration
- * - Service identity integration
- * - Pre-configured application and network metrics
- * - Prometheus exporter integration
- *
+ * Counter tracking UDP broadcast requests received.
  * @remarks
- * OtelMeterics serves as the main entry point for metrics operations in the
- * distributed RPC system. It automatically detects service attributes and
- * configures the OpenTelemetry metric pipeline with appropriate resource attributes.
- *
+ * Monitors service discovery activity and UDP broadcast volume.
+ * Useful for tracking how many services are discovering this service.
  * @example
  * ```typescript
- * const metrics = new OtelMeterics({
- *   serviceName: "OrderService",
- *   serviceVersion: "1.0.0",
- * });
- *
- * // Record application metrics
- * executionTime.record(150, { method: "processOrder" });
- * activeConnections.add(1, { direction: "inbound" });
+ * import { udpBroadcastRequests } from './otel-metrics';
+ * udpBroadcastRequests.add(1, { service_type: 'discovery' });
  * ```
  */
+export const udpBroadcastRequests = _netMeter.createCounter(
+  "udp_broadcast_requests_total",
+  {
+    description: "Total UDP broadcast requests received",
+  },
+);
+
+/**
+ * Counter tracking UDP broadcast responses sent.
+ * @remarks
+ * Monitors service discovery responses and broadcast response activity.
+ * Tracks how many services we've responded to during discovery.
+ * @example
+ * ```typescript
+ * import { udpBroadcastResponses } from './otel-metrics';
+ * udpBroadcastResponses.add(1, { target_service: 'OrderService' });
+ * ```
+ */
+export const udpBroadcastResponses = _netMeter.createCounter(
+  "udp_broadcast_responses_total",
+  {
+    description: "Total UDP broadcast responses sent",
+  },
+);
+
+export class OtelProviderState extends ProviderState {
+  private _callback?: ObservableCallback;
+
+  /**
+   * Creates an ObservableCallback for reporting server state to OpenTelemetry.
+   */
+  public createCallback(): ObservableCallback {
+    if (!this._callback) {
+      this._callback = (observable: ObservableResult) => {
+        const attr = {
+          [ATTR_SERVICE_NAME]: this.provider[ATTR_SERVICE_NAME],
+          [ATTR_SERVICE_INSTANCE]: this.provider[ATTR_SERVICE_INSTANCE],
+          [ATTR_SERVICE_STATE]: this.state,
+        };
+        observable.observe(ServerStateValues[this.state], attr);
+      };
+    }
+    return this._callback;
+  }
+
+  /**
+   * Gets the cached ObservableCallback.
+   */
+  public getCallback(): ObservableCallback | undefined {
+    return this._callback;
+  }
+}
+
 export class OtelMeterics {
   private _provider: MeterProvider;
+  private _appMeter: Meter;
+  private _netMeter: Meter;
+  private _providerState?: OtelProviderState;
 
-  /**
-   * Creates and returns a Meter instance with the specified name.
-   * @param name - The name to identify the meter.
-   * @returns A Meter instance for creating instruments.
-   */
-  public static getMeter(name: string) {
-    return metrics.getMeter(name);
-  }
+  private _executionTime?: Histogram;
+  private _retryAttempts?: Counter;
+  private _retryDuration?: Histogram;
+  private _serverState?: ObservableGauge;
+  private _listenerState?: ObservableGauge;
+  private _activeConnections?: UpDownCounter;
+  private _bytesCounter?: Counter;
+  private _udpBroadcastRequests?: Counter;
+  private _udpBroadcastResponses?: Counter;
+  private _udpBroadcastLatency?: Histogram;
+  private _tcpConnectionDuration?: Histogram;
+  private _tcpConnectionsFailed?: Counter;
+  private _tcpDataTransferSize?: Histogram;
 
-  /**
-   * Returns the current global MeterProvider.
-   * @returns The globally configured MeterProvider.
-   */
-  public static getMeterProvider() {
-    return metrics.getMeterProvider();
-  }
-
-  /**
-   * Initializes a new MeterProvider and sets it as the global meter provider.
-   * @param providerAttr - Resource attributes to associate with the meter provider.
-   * @example
-   * ```typescript
-   * new OtelMeterics({ serviceName: 'distributed-rpc', serviceVersion: '1.0.0' });
-   * ```
-   */
-  constructor(providerAttr: DetectedResourceAttributes) {
+  constructor(
+    providerAttr: DetectedResourceAttributes,
+    providerState?: OtelProviderState,
+  ) {
     this._provider = new MeterProvider({
       resource: resourceFromAttributes(providerAttr),
     });
-    metrics.setGlobalMeterProvider(this._provider);
+    this._appMeter = this._provider.getMeter(MeterType.Application);
+    this._netMeter = this._provider.getMeter(MeterType.Network);
+    this._providerState = providerState;
+    this._createInstruments();
+    this._registerCallbacks();
   }
 
-  /**
-   * Shuts down the meter provider and releases all resources.
-   * @returns Promise that resolves when shutdown is complete.
-   */
+  private _registerCallbacks(): void {
+    if (this._providerState) {
+      const callback = this._providerState.createCallback();
+      if (this._serverState) {
+        this._serverState.addCallback(callback);
+      }
+      if (this._listenerState) {
+        this._listenerState.addCallback(callback);
+      }
+    }
+  }
+
+  private _createInstruments(): void {
+    this._executionTime = this._appMeter.createHistogram(
+      "method_execution_time",
+      {
+        description: "Execution time of service methods",
+        unit: "ms",
+      },
+    );
+    this._retryAttempts = this._appMeter.createCounter("retry_attempts_total", {
+      description: "Total retry attempts of a job",
+    });
+    this._retryDuration = this._appMeter.createHistogram("retry_duration", {
+      description: "Retry duration of a job",
+      unit: "ms",
+    });
+    this._serverState = this._netMeter.createObservableGauge("server_state", {
+      description: "Server state",
+    });
+    this._listenerState = this._netMeter.createObservableGauge(
+      "listener_state",
+      {
+        description: "Listener state",
+      },
+    );
+    this._activeConnections = this._netMeter.createUpDownCounter(
+      "active_connections",
+      {
+        description: "Active TCP connections",
+      },
+    );
+    this._bytesCounter = this._appMeter.createCounter("bytes_total", {
+      description: "Total bytes sent and received",
+      unit: "bytes",
+    });
+    this._udpBroadcastRequests = this._appMeter.createCounter(
+      "udp_broadcast_requests_total",
+      {
+        description: "Total UDP broadcast requests received",
+      },
+    );
+    this._udpBroadcastResponses = this._appMeter.createCounter(
+      "udp_broadcast_responses_total",
+      {
+        description: "Total UDP broadcast responses sent",
+      },
+    );
+    this._udpBroadcastLatency = this._appMeter.createHistogram(
+      "udp_broadcast_response_time",
+      {
+        description: "Time to respond to UDP broadcast requests",
+        unit: "ms",
+      },
+    );
+    this._tcpConnectionDuration = this._appMeter.createHistogram(
+      "tcp_connection_duration",
+      {
+        description: "Duration of TCP connections",
+        unit: "ms",
+      },
+    );
+    this._tcpConnectionsFailed = this._appMeter.createCounter(
+      "tcp_connections_failed_total",
+      {
+        description: "Total failed TCP connection attempts",
+      },
+    );
+    this._tcpDataTransferSize = this._appMeter.createHistogram(
+      "tcp_data_transfer_size",
+      {
+        description: "Size of data transferred over TCP connections",
+        unit: "bytes",
+      },
+    );
+  }
+
+  public getExecutionTime(): Histogram | undefined {
+    return this._executionTime;
+  }
+
+  public getRetryAttempts(): Counter | undefined {
+    return this._retryAttempts;
+  }
+
+  public getRetryDuration(): Histogram | undefined {
+    return this._retryDuration;
+  }
+
+  public getServerState(): ObservableGauge | undefined {
+    return this._serverState;
+  }
+
+  public getListenerState(): ObservableGauge | undefined {
+    return this._listenerState;
+  }
+
+  public getActiveConnections(): UpDownCounter | undefined {
+    return this._activeConnections;
+  }
+
+  public getBytesCounter(): Counter | undefined {
+    return this._bytesCounter;
+  }
+
+  public getUdpBroadcastRequests(): Counter | undefined {
+    return this._udpBroadcastRequests;
+  }
+
+  public getUdpBroadcastResponses(): Counter | undefined {
+    return this._udpBroadcastResponses;
+  }
+
+  public getUdpBroadcastLatency(): Histogram | undefined {
+    return this._udpBroadcastLatency;
+  }
+
+  public getTcpConnectionDuration(): Histogram | undefined {
+    return this._tcpConnectionDuration;
+  }
+
+  public getTcpConnectionsFailed(): Counter | undefined {
+    return this._tcpConnectionsFailed;
+  }
+
+  public getTcpDataTransferSize(): Histogram | undefined {
+    return this._tcpDataTransferSize;
+  }
+
+  public getNetMeter(): Meter {
+    return this._netMeter;
+  }
+
+  public getAppMeter(): Meter {
+    return this._appMeter;
+  }
+
   public async shutdown(): Promise<void> {
     await this._provider.shutdown();
   }

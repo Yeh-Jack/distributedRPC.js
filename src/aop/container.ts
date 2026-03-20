@@ -14,10 +14,8 @@ import { ExecutionMetrics } from "../metrics/exec-metrics";
 import { instrumentService } from "../aop/exec-time-interceptor";
 
 import { BroadcastUdpServer } from "../network/broadcast-udp-server";
-import { ServiceManager } from "../manager/service-manager";
 import { ServiceProvider } from "../provider/service-provider";
 import { TcpServer } from "../network/tcp-server";
-import { UdpClient } from "../network/udp-client";
 import { UdpDiscovery } from "../network/udp-discovery";
 import { UdpServer } from "../network/udp-server";
 import { AppEnv } from "../types/basal-protocol";
@@ -107,6 +105,20 @@ export function createOtelExporter(configManager: ConfigManager) {
   }
 }
 
+export async function createProvider<T extends ServiceProvider>(
+  serviceClass: new (...args: any[]) => T,
+): Promise<T> {
+  container
+    .bind<T>(serviceClass)
+    .to(serviceClass)
+    .onActivation(async (_ctx, _instance) => {
+      await _instance.reload();
+      const metrics = new ExecutionMetrics(_instance.getLogger());
+      return instrumentService(_instance, metrics);
+    });
+  return container.getAsync<T>(serviceClass);
+}
+
 export function createServiceManagerDiscover(
   configManager: ConfigManager,
   name: string,
@@ -118,53 +130,3 @@ export function createServiceManagerDiscover(
 
   return undefined;
 }
-
-/**
- * Helper function to access the container within closures.
- * Required because Inversify's resolution context doesn't expose the container directly.
- */
-function getContainer(): Container {
-  return container;
-}
-
-// Bind BroadcastUdpServer
-container
-  .bind<BroadcastUdpServer>(TYPES.BroadcastUdpServer)
-  .to(BroadcastUdpServer);
-
-// Bind TcpServer
-container.bind<TcpServer>(TYPES.TcpServer).to(TcpServer);
-
-// Bind UdpServer
-container.bind<UdpServer>(TYPES.UdpServer).to(UdpServer);
-
-// Bind UdpClient
-container.bind<UdpClient>(TYPES.UdpClient).to(UdpClient);
-
-// Bind UdpDiscovery
-container.bind<UdpDiscovery>(TYPES.UdpDiscovery).to(UdpDiscovery);
-
-// Service with DI-compatible instrumentation
-container
-  .bind<ServiceProvider>(TYPES.ServiceProvider)
-  .to(ServiceProvider)
-  .onActivation((_ctx, _instance) => {
-    // Create a new ServiceProvider instance
-    const serviceProvider = new ServiceProvider();
-
-    // Create a new ExecutionMetrics instance for this ServiceProvider
-    const metrics = new ExecutionMetrics(serviceProvider.getLogger());
-    return instrumentService(serviceProvider, metrics);
-  });
-
-container
-  .bind<ServiceManager>(TYPES.ServiceManager)
-  .to(ServiceManager)
-  .onActivation((_ctx, _instance) => {
-    // Create a new ServiceManager instance
-    const serviceManager = new ServiceManager();
-
-    // Create a new ExecutionMetrics instance for this ServiceManager
-    const metrics = new ExecutionMetrics(serviceManager.getLogger());
-    return instrumentService(serviceManager, metrics);
-  });

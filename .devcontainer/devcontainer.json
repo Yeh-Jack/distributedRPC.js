@@ -16,6 +16,8 @@
   "forwardPorts": [3000, 3030, 4173, 5173, 8080, 8888, 9229, 9999],
 
   "containerEnv": {
+    // Access token for SonarLint.
+    "SONAR_TOKEN": "${localEnv:SONAR_TOKEN}",
     "TZ": "Asia/Taipei"
   },
   "mounts": [
@@ -33,6 +35,8 @@
     "source=/home/dev_bind/lambda.theme.sh,target=/home/node/.oh-my-bash/custom/themes/lambda/lambda.theme.sh,type=bind",
     "source=/home/dev_bind/gitconfig,target=/home/node/.gitconfig,type=bind",
     "source=/home/dev_bind/ssh,target=/home/node/.ssh,type=bind",
+    "source=/home/dev_bind/opencode.json,target=/home/node/.config/opencode/opencode.json,type=bind",
+    "source=/home/dev_bind/profile,target=/home/node/.profile,type=bind",
     "source=containerd,target=/var/lib/containerd,type=volume",
     "source=dind,target=/var/lib/docker,type=volume"
   ],

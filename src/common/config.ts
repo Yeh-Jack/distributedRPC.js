@@ -39,6 +39,7 @@ export interface CoreConfig {
   };
   retry: RetryConfig;
   service_name: string;
+  provider_id: string; // Value assigned at ServiceProvider._updateProviderInfo().
 }
 
 /**
@@ -149,6 +150,7 @@ export class ConfigManager<
   T_Core extends CoreConfig = CoreConfig,
 > {
   protected config: ProviderConfig<T_App, T_Core>;
+  private _initName: string;
   private _loggerManager: LoggerManager;
 
   /**
@@ -157,7 +159,8 @@ export class ConfigManager<
    * @remarks
    * Supports dependency injection via InversifyJS.
    */
-  public constructor() {
+  public constructor(providerName?: string) {
+    this._initName = providerName || UNKNOWN_ATTRIBUTE;
     this.config = this._loadConfig();
     this._loggerManager = new LoggerManager(this);
   }
@@ -212,6 +215,15 @@ export class ConfigManager<
   }
 
   /**
+   * Get provider Id of this ServiceProvider.
+   *
+   * @returns {string} The provider Id.
+   */
+  public getProviderId(): string {
+    return this.getCoreConfig().provider_id;
+  }
+
+  /**
    * Reloads the configuration by re-invoking the configuration loading logic.
    *
    * @remarks
@@ -251,7 +263,7 @@ export class ConfigManager<
           multiplier: DEFAULT_RETRY_MULTIPLIER,
         },
       },
-      service_name: UNKNOWN_ATTRIBUTE,
+      service_name: this._initName,
     } as T_Core;
   }
 

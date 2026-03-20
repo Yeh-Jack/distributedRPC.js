@@ -10,7 +10,7 @@
     "format": "prettier --write \"src/**/*.{ts,js,json,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,js,json,md}\"",
     "set_env": "scripts/get-host-cidr.sh",
-    "start": "pnpm set_env && ts-node src/main.ts",
+    "start": "pnpm set_env && tsx src/main.ts",
     "test": "vitest",
     "test:watch": "vitest --watch",
     "test:coverage": "vitest --coverage"
@@ -25,7 +25,7 @@
     "@vitest/coverage-v8": "^4.0.17",
     "@vitest/ui": "^4.0.17",
     "prettier": "^3.8.1",
-    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
     "typedoc": "^0.28.15",
     "typescript": "^5.9.3",
     "vite": "^7.3.0",

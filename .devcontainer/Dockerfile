@@ -4,15 +4,18 @@ FROM mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm
 # --- Install OS level packages. ---
 ARG USER="node"
 RUN export DEBIAN_FRONTEND=noninteractive && \
-    # Add Java 21 repository which is required for SonarLint extension.
+    # --- Add Java 21 repository which is required for SonarLint extension.
     apt update && apt-get install -y --no-install-recommends gnupg software-properties-common wget && \
     wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor | tee /usr/share/keyrings/adoptium.gpg > /dev/null && \
     echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb bookworm main" | tee /etc/apt/sources.list.d/adoptium.list && \
     apt update && apt upgrade -y && apt-get install -y --no-install-recommends \
         curl git git-lfs htop iftop net-tools netcat-traditional nfs-common nmap rsync traceroute vim \
-        dnsutils exfatprogs iputils-ping openssh-server python3-pip python3-venv telnet temurin-21-jdk && \
-    # Clean up packages and repositories.
+        dnsutils exfatprogs iputils-ping openssh-server telnet temurin-21-jdk && \
+    # --- Clean up packages and repositories.
     apt-get autoclean && apt-get autoremove && rm -rf /var/lib/apt/lists/* && \
+    # --- Install python package manager 'uv'. ---
+    curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    mv /root/.local/bin/uv /usr/local/bin/ && mv /root/.local/bin/uvx /usr/local/bin/ && rm -rf /root/.local && \
     # --- Install oh-my-bash for root and node user, disable auto update and change theme to 'lambda'. ---
     bash -c "$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)" --unattended && \
     sed -i 's/^# DISABLE_AUTO_UPDATE/DISABLE_AUTO_UPDATE/' ~/.bashrc && \
@@ -35,6 +38,10 @@ ARG PNPM_VERSION="10.28.2"
 # Node.js v22 is the minimum version required for running OpenCode.
 ENV NODE_VERSION=22
 ENV TZ="Asia/Taipei"
+# Configure 'uv'.
+ENV UV_CACHE_DIR=/tmp/.uv_cache
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
 
 # --- Install Node.js, OpenCode and "UI UX Pro Max" skill globally. ---
 RUN \

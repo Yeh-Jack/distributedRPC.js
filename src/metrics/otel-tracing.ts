@@ -20,8 +20,8 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-node";
 
-import { NetworkDirection, NetworkProtocol } from "../network/network-events";
-import { AppEnv, getAppEnv } from "../types/basal-protocol";
+import { NetworkDirection } from "../network/network-events";
+import { AppEnv, NetworkProtocol, getAppEnv } from "../types/basal-protocol";
 import {
   ProviderState,
   DEFAULT_RESOURCE,
@@ -234,5 +234,13 @@ export class OtelTracer {
   private setTracerProvider(provider: NodeTracerProvider): void {
     this._tracerProvider = provider;
     this._tracer = provider.getTracer("distributed-rpc");
+  }
+
+  public async shutdown(): Promise<void> {
+    if (this._tracerProvider) {
+      await this._tracerProvider.shutdown();
+      this._tracerProvider = undefined;
+      this._tracer = undefined;
+    }
   }
 }

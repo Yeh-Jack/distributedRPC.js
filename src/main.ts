@@ -12,26 +12,44 @@ import { ConfigManager } from "./common/config";
 
 const INTERRUPT_KEY = "<Ctrl+C>";
 
-function handleInterruption(provider: ServiceProvider, logger: any) {
-  const providerName = provider.getServiceName();
+function handleInterruption(providers: ServiceProvider[], logger: any) {
+  const stopAll = async () => {
+    const promises = providers.map((provider) => {
+      return provider.shutdown();
+    });
+
+    await Promise.all(promises);
+    process.nextTick(() => {
+      logger.info(`Providers [${providersName}] are all shuted down.`);
+    });
+
+    logger.info(
+      "All service providers are shuted down, exit this application.",
+    );
+    process.exit(0);
+  };
+
+  const providersName = providers
+    .map((provider) => provider.getServiceName())
+    .join(", ");
 
   // Handle graceful shutdown for <Ctrl+C>.
   process.on("SIGINT", async () => {
     logger.info(
-      `${INTERRUPT_KEY} is detected, shutting down the ${providerName} gracefully ...`,
+      `${INTERRUPT_KEY} is detected, shutting down the ${providersName} gracefully ...`,
     );
-    await provider.stop();
-    process.exit(0);
+
+    await stopAll();
   });
 
   // Setup signal handlers for graceful shutdown.
   ["SIGABRT", "SIGHUP", "SIGTERM"].forEach((signal) => {
     process.on(signal as NodeJS.Signals, async () => {
       logger.info(
-        `Received <${signal}> for ${providerName}, shutting down gracefully ...`,
+        `Received <${signal}> for ${providersName}, shutting down gracefully ...`,
       );
-      await provider.stop();
-      process.exit(0);
+
+      await stopAll();
     });
   });
 }
@@ -61,13 +79,15 @@ async function main(): Promise<void> {
   const managerName = manager.getServiceName();
   const provider = await createProvider(ServiceProvider);
   const providerName = provider.getServiceName();
+  const providers = [manager, provider];
 
-  handleInterruption(provider, logger);
+  handleInterruption(providers, logger);
   logger.info(`${managerName} and ${providerName} instances are constructed.`);
 
   try {
     const startTime = process.hrtime.bigint();
     await Promise.all([manager.start(), provider.start()]);
+    await provider.register();
     const elapsedNs = process.hrtime.bigint() - startTime;
     const elapsedMs = Number(elapsedNs) / 1_000_000;
     logger.info(

@@ -10,7 +10,7 @@ import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
-import { ExecutionState } from "../types/basal-protocol";
+import { ExecutionState, NetworkProtocol } from "../types/basal-protocol";
 import { TYPES } from "../aop/di-types";
 import { TypedEventEmitter } from "./typed-event-emitter";
 import {
@@ -25,7 +25,6 @@ import {
   NetworkEvent,
   NetworkEventMap,
   NetworkPeer,
-  NetworkProtocol,
   NetworkRetryable,
 } from "./network-events";
 import { generateCorrelationId } from "../metrics/otel-resource";
@@ -157,13 +156,13 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     if (this._state !== ExecutionState.Stopped) return;
 
     const config = this.configManager.getCoreConfig();
-    const netConfig = config.net;
+    const tcpConfig = config.net.tcp;
     const retryConfig = config.retry;
 
     this.logger = this.configManager.getLogger(); // Reload the logger.
     this._abortController = new AbortController();
-    this._address = netConfig.tcp_address;
-    this._port = netConfig.tcp_port; // Default to 0.
+    this._address = tcpConfig.address;
+    this._port = tcpConfig.port; // Default to 0.
 
     this._setState(ExecutionState.Starting);
     this.logger.debug(
@@ -340,7 +339,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
 
         try {
           // Call Function.apply() to force 'this' scope.
-          this.handleData.apply(this, [peer, data.toString(), connectionInfo]);
+          this.handleData.apply(this, [peer, data, connectionInfo]);
           dataHandlingSpan.setStatus({ code: 1 }); // OK
         } catch (error) {
           tracer.recordException(dataHandlingSpan, error as Error);
@@ -435,7 +434,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
    */
   protected handleData(
     peer: NetworkPeer,
-    data: string,
+    data: string | Buffer,
     connectionInfo: any,
   ): void {
     bytesCounter.add(data.length, connectionInfo);

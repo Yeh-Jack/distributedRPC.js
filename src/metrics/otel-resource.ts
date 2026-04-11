@@ -35,5 +35,6 @@ export const ServerStateValues: Record<ExecutionState, number> = {
  * Generates a correlation ID for tracing purposes
  */
 export function generateCorrelationId(): string {
+  // Length of the generated ID must be less then MAX_MSG_ID_LEN (64) characters.
   return `trace_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 }

@@ -9,7 +9,8 @@ import { injectable } from "inversify";
 
 import { ConfigManager, DEFAULT_DISCOVERY_PORT } from "../common/config";
 import { SendOptions, UdpClient } from "./udp-client";
-import { BroadcastResponse, PROBE_MESSAGE } from "../types/basal-protocol";
+import { PROBE_MESSAGE, SECOND } from "../types/basal-protocol";
+import { BroadcastResponse260321 } from "../manager/api-spec-260321";
 import { generateCorrelationId } from "../metrics/otel-resource";
 import { NetworkSpanOptions, OtelTracer } from "../metrics/otel-tracing";
 import { NetworkDirection } from "./network-events";
@@ -37,7 +38,7 @@ export interface DiscoveryOptions extends SendOptions {
  */
 export interface DiscoveryResult {
   /** Array of responses received from ServiceManagers. */
-  responses: BroadcastResponse[];
+  responses: BroadcastResponse260321[];
   /** Total time taken for the discovery operation in milliseconds. */
   durationMs: number;
   /** Number of responses received. */
@@ -89,7 +90,7 @@ export class UdpDiscovery extends UdpClient {
     address: "192.168.255.255",
     port: DEFAULT_DISCOVERY_PORT,
     maxResponses: 0, // 0 = unlimited.
-    timeout: 5000, // Default to 5 seconds.
+    timeout: 5 * SECOND, // Default to 5 seconds.
   };
 
   constructor(configManager: ConfigManager, name: string = "udp-discovery") {
@@ -158,7 +159,7 @@ export class UdpDiscovery extends UdpClient {
       spanOptions,
     );
 
-    const responses: BroadcastResponse[] = [];
+    const responses: BroadcastResponse260321[] = [];
     const startTime = Date.now();
 
     try {
@@ -271,14 +272,14 @@ export class UdpDiscovery extends UdpClient {
    * @async
    * @param {string} probeMessage
    * @param {SendOptions} options
-   * @param {BroadcastResponse[]} responses
+   * @param {BroadcastResponse260321[]} responses
    * @param {number} maxResponses
    * @returns {Promise<void>}
    */
   private async _collectResponses(
     probeMessage: string,
     options: SendOptions,
-    responses: BroadcastResponse[],
+    responses: BroadcastResponse260321[],
     maxResponses: number,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -291,7 +292,7 @@ export class UdpDiscovery extends UdpClient {
         try {
           // Attempt to parse the response as JSON
           const responseText = data.toString();
-          const response: BroadcastResponse = JSON.parse(responseText);
+          const response: BroadcastResponse260321 = JSON.parse(responseText);
 
           // Validate that it looks like a valid BroadcastResponse
           if (!response.manager || !response.manager.provider) {
@@ -301,7 +302,10 @@ export class UdpDiscovery extends UdpClient {
 
           const provider = response.manager.provider;
           this.logger.debug(
-            `Received response from <${provider.name}-${provider.id}> at ${peerInfo}.`,
+            `Response from <${provider.name}-${provider.id}> at ${peerInfo} received.`,
+          );
+          this.logger.silly(
+            `Response data :\n${JSON.stringify(response, undefined, 2)}`,
           );
 
           responses.push(response);

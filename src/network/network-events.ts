@@ -6,16 +6,7 @@
 import * as os from "os";
 import { Socket as TcpSocket } from "net";
 import { Socket as UdpSocket } from "dgram";
-
-/**
- * Set of network error codes that are considered retryable.
- * Operations encountering these errors should be retried rather than treated as fatal.
- */
-export const NetworkRetryable = new Set([
-  "EADDRINUSE",
-  "EADDRNOTAVAIL",
-  "ENETDOWN",
-]);
+import { NetworkProtocol, SocketAddress } from "../types/basal-protocol";
 
 export enum NetworkDirection {
   In = "inbound",
@@ -28,7 +19,9 @@ export enum NetworkDirection {
 export enum NetworkEvent {
   /** Server is listening for connections (TCP/UDP bind complete). */
   Listening = "listening",
-  /** New client connection established (TCP only). */
+  /** Client connected to server (TCP client only). */
+  Connect = "connect",
+  /** New client connection established (TCP server only). */
   Connection = "connection",
   /** Data received from peer (TCP). */
   Data = "data",
@@ -41,42 +34,6 @@ export enum NetworkEvent {
   /** Server stopped (custom event). */
   Stop = "stop",
 }
-
-/**
- * Network protocol types supported by the distributed RPC framework.
- */
-export enum NetworkProtocol {
-  /** Transmission Control Protocol - reliable, connection-oriented communication. */
-  TCP = "TCP",
-  /** User Datagram Protocol - fast, connectionless communication. */
-  UDP = "UDP",
-}
-
-/**
- * Represents a network peer (client or remote endpoint).
- * Type discriminator based on protocol (TCP or UDP).
- */
-export type NetworkPeer =
-  | {
-      /** TCP protocol connection. */
-      protocol: NetworkProtocol.TCP;
-      /** TCP socket instance. */
-      socket: TcpSocket;
-      /** Remote IP address. */
-      address: string;
-      /** Remote port number. */
-      port: number;
-    }
-  | {
-      /** UDP protocol connection. */
-      protocol: NetworkProtocol.UDP;
-      /** UDP socket instance. */
-      socket: UdpSocket;
-      /** Remote IP address. */
-      address: string;
-      /** Remote port number. */
-      port: number;
-    };
 
 /**
  * Event map for TypedEventEmitter, mapping event names to their callback signatures.
@@ -113,6 +70,34 @@ export interface NetworkMetrics {
   /** Current active connections (TCP only). */
   activeConnections?: number;
 }
+
+/**
+ * Represents a network peer (client or remote endpoint).
+ * Type discriminator based on protocol (TCP or UDP).
+ */
+export type NetworkPeer =
+  | (SocketAddress & {
+      /** TCP protocol connection. */
+      protocol: NetworkProtocol.TCP;
+      /** TCP socket instance. */
+      socket: TcpSocket;
+    })
+  | (SocketAddress & {
+      /** UDP protocol connection. */
+      protocol: NetworkProtocol.UDP;
+      /** UDP socket instance. */
+      socket: UdpSocket;
+    });
+
+/**
+ * Set of network error codes that are considered retryable.
+ * Operations encountering these errors should be retried rather than treated as fatal.
+ */
+export const NetworkRetryable = new Set([
+  "EADDRINUSE",
+  "EADDRNOTAVAIL",
+  "ENETDOWN",
+]);
 
 /**
  * Calculates the broadcast address(es) for one or more network interfaces.

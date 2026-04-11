@@ -10,14 +10,13 @@ import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
-import { ExecutionState } from "../types/basal-protocol";
+import { ExecutionState, NetworkProtocol } from "../types/basal-protocol";
 import { TypedEventEmitter } from "./typed-event-emitter";
 import { bytesCounter } from "../metrics/otel-metrics";
 import {
   NetworkEvent,
   NetworkEventMap,
   NetworkPeer,
-  NetworkProtocol,
   NetworkRetryable,
 } from "./network-events";
 
@@ -140,13 +139,13 @@ export class UdpServer extends TypedEventEmitter<NetworkEventMap> {
     if (this._state !== ExecutionState.Stopped) return;
 
     const config = this.configManager.getCoreConfig();
-    const netConfig = config.net;
+    const udpConfig = config.net.udp;
     const retryConfig = config.retry;
 
     this.logger = this.configManager.getLogger(); // Reload the logger.
     this._abortController = new AbortController();
-    this._address = netConfig.udp_address;
-    this._port = netConfig.udp_port; // Default to 5707.
+    this._address = udpConfig.address;
+    this._port = udpConfig.port; // Default to 5707.
 
     this._setState(ExecutionState.Starting);
     this.logger.debug(

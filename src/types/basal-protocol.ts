@@ -1,23 +1,64 @@
 import { randomBytes } from "crypto";
-import { NetworkProtocol } from "../network/network-events";
 
-// Broadcast message for finding ServiceManager.
+// Time unit constants.
+export const SECOND = 1000;
+export const MINUTE = 60 * SECOND;
+export const HOUR = 60 * MINUTE;
+export const DAY = 24 * HOUR;
+export const WEEK = 7 * DAY;
+
+// Standard keywords.
+export const DEFAULT_ENCODE = "utf-8";
+export const FOLLOW_UP = "  --> ";
+export const MAX_HEADER_LEN = 64;
+export const NO_RESPONSE = "None";
 export const PROBE_MESSAGE = "Bonjour and EnjoIT.";
-
-/**
- * Unknown attribute constant.
- *
- * @type {"Unknown"}
- */
 export const UNKNOWN_ATTRIBUTE = "Unknown";
 
 // Connection information of service provider.
-export interface AccessPoint {
+export interface AccessPoint extends SocketAddress {
   authorization: string; // Authorization key for accessing this provider.
-  function: string[]; // Capbilities of the provider.
-  host: string; // Host IP of the provider.
-  port: number; // Port number the access point listening on.
-  protocol: NetworkProtocol; // Network protocol of the access point.
+  api: string[]; // Capbilities of the provider.
+}
+
+/**
+ * Acknowledge type for an API request.
+ * `Error` and `InvalidReqData` are forced to send if error occurs from a request.
+ */
+export enum AckType {
+  None = "None", // No ACK.
+  Single = "Single", // Send ACK to requester if no response will be sent.
+  Double = "Double", // Requester send ACK back to the handler to confirm the response received.
+}
+
+export enum AckValue {
+  Ack = "Ack", // The ACK message.
+  Error = "Error", // Failed to process the request.
+  InvalidReqData = "InvalidReqData", // Failed on invalid request data.
+  None = "None", // No ACK.
+}
+
+/**
+ * Data structure for any remote procedure call or API.
+ * Join the `group`, `intermediate` and `inst` elements for the full path of the RPC.
+ * You can think of the full path as API path.
+ */
+export interface ApiCall {
+  peer: PeerIdentity;
+  api: string; // Path (delimite by '/') name of the procedure.
+  args: any | undefined; // Arguments for the procedure call.
+  msgId: string | undefined;
+  promise?: {
+    resolve: Function;
+    reject: Function;
+  };
+}
+
+// Interface or type name for an API format.
+export interface ApiSpec {
+  request: string;
+  response: string;
+  ack: AckType;
 }
 
 /**
@@ -47,6 +88,11 @@ export interface BasalProtocol {
   protocol_ver: string;
 
   /**
+   * APIs specification.
+   */
+  apis: any;
+
+  /**
    * Metadata of the service provider.
    *
    * @type {{
@@ -61,14 +107,6 @@ export interface BasalProtocol {
     name: string;
     desc: string;
     version: string;
-  };
-}
-
-// Response message format from ServiceManager.
-export interface BroadcastResponse {
-  manager: BasalProtocol & {
-    // Based on the BasalProtocol format with AccessPoint information merged into provider.
-    provider: BasalProtocol["provider"] & AccessPoint;
   };
 }
 
@@ -104,15 +142,64 @@ export enum MeterType {
 }
 
 /**
- * Types of meters for OpenTelemetry.
- *
- * @public
- * @enum {string}
+ * Network protocol types supported by the distributed RPC framework.
+ */
+
+export enum NetworkProtocol {
+  /** Transmission Control Protocol - reliable, connection-oriented communication. */
+  TCP = "TCP",
+  /** User Datagram Protocol - fast, connectionless communication. */
+  UDP = "UDP",
+}
+
+export interface PeerIdentity {
+  service: string;
+  instance: string;
+}
+
+export type ProviderConnectInfo = AccessPoint & BasalProtocol["provider"];
+
+/**
+ * Data structure for register a service provider.
+ */
+export interface RegisterInfo extends BasalProtocol {
+  provider: BasalProtocol["provider"] & AccessPoint;
+}
+
+export interface ResponseArgs {
+  apiSpec: ApiSpec;
+  data: any;
+  errType: AckValue;
+  request: ApiCall;
+  target: any;
+}
+
+/**
+ * For working with RESTful style.
+ * Authorization is optional.
+ */
+export interface RestCall extends ApiCall {
+  method: string;
+  authType?: string;
+  authorization?: string;
+}
+
+/**
+ * Type of discovering service manager.
  */
 export const ServiceManagerDiscovery = {
   None: Symbol.for("None"),
   UDP: Symbol.for("UdpDiscovery"),
 };
+
+export interface SocketAddress {
+  // Remote IP address.
+  address: string;
+  // Remote port number.
+  port: number;
+  // Protocol of the connection.
+  protocol: NetworkProtocol;
+}
 
 /**
  * Simple ID generator which creates 8 bytes of Timestamp (seconds) and 8 bytes of Randomness.

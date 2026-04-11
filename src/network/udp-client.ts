@@ -10,14 +10,13 @@ import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
-import { ExecutionState } from "../types/basal-protocol";
+import { ExecutionState, NetworkProtocol, SECOND } from "../types/basal-protocol";
 import { TypedEventEmitter } from "./typed-event-emitter";
 import { bytesCounter } from "../metrics/otel-metrics";
 import {
   NetworkEvent,
   NetworkEventMap,
   NetworkPeer,
-  NetworkProtocol,
   NetworkRetryable,
 } from "./network-events";
 
@@ -227,7 +226,7 @@ export class UdpClient extends TypedEventEmitter<NetworkEventMap> {
     options: SendOptions,
   ): Promise<UdpResponse> {
     const socket = this.getReadySocket();
-    const timeout = options.timeout ?? 5000; // Default timeout is 5 seconds.
+    const timeout = options.timeout ?? 5 * SECOND; // Default timeout is 5 seconds.
     message = typeof message === "string" ? Buffer.from(message) : message;
 
     return new Promise((resolve, reject) => {

@@ -1,18 +1,31 @@
 import { Server } from "net";
 import { injectable } from "inversify";
 
-import {
-  AccessPoint,
-  BasalProtocol,
-  BroadcastResponse,
-  ServiceManagerDiscovery,
-  generateInstanceId,
-} from "../types/basal-protocol";
 import { TYPES } from "../aop/di-types";
 import { createNamedUdpServer } from "../aop/container";
 import { BroadcastUdpServer } from "../network/broadcast-udp-server";
+import { NetworkPeer } from "../network/network-events";
 import { TcpServer } from "../network/tcp-server";
 import { ServiceProvider } from "../provider/service-provider";
+import {
+  AccessPoint,
+  AckType,
+  ApiCall,
+  BasalProtocol,
+  PeerIdentity,
+  ProviderConnectInfo,
+  RegisterInfo,
+  ResponseArgs,
+  ServiceManagerDiscovery,
+  generateInstanceId,
+  FOLLOW_UP,
+} from "../types/basal-protocol";
+import {
+  BroadcastResponse260321,
+  ServiceManagerConfig,
+  SpecServiceManager260321,
+  SPEC_SVC_MGR_260321,
+} from "./api-spec-260321";
 
 /**
  * Central orchestration service for distributed RPC system management.
@@ -48,15 +61,21 @@ import { ServiceProvider } from "../provider/service-provider";
  */
 @injectable()
 export class ServiceManager extends ServiceProvider {
-  public readonly PROTOCOL: BasalProtocol = {
-    protocol_ver: "1.0.0",
+  protected readonly PROTOCOL: BasalProtocol & SpecServiceManager260321 = {
     provider: {
       id: generateInstanceId(),
       name: this.constructor.name,
       desc: "Service Manager for orchestrating services.",
       version: "1.0.0",
     },
+    ...SPEC_SVC_MGR_260321,
   };
+
+  protected override configManager: ServiceManagerConfig =
+    new ServiceManagerConfig(this.PROTOCOL.provider.name);
+
+  private _services: Map<string, any> = new Map();
+  // private _instances: Map<string, any> = new Map();
 
   // Resources should be released during shutdown.
 
@@ -65,6 +84,19 @@ export class ServiceManager extends ServiceProvider {
    */
   public constructor() {
     super();
+  }
+
+  protected override async askProviderInfo(
+    data: ApiCall,
+  ): Promise<ProviderConnectInfo | undefined> {
+    const register: RegisterInfo | undefined = this.getProvider(data.peer);
+    return register ? register.provider : undefined;
+  }
+
+  protected getProvider(peer: PeerIdentity): RegisterInfo | undefined {
+    const svcGroup = this._services.get(peer.service);
+    if (!svcGroup) return;
+    return svcGroup[peer.instance];
   }
 
   /**
@@ -88,12 +120,33 @@ export class ServiceManager extends ServiceProvider {
   }
 
   // --------------------------------------------
+  // API functions.
+  // --------------------------------------------
+
+  public async gotReport(data: ApiCall): Promise<void> {
+    //TODO
+  }
+
+  protected async registrar(data: ApiCall): Promise<void> {
+    const from = this.getPeerId(data);
+    this._putProvider(data);
+    this.logger.info(`${from} registered.`);
+  }
+
+  // --------------------------------------------
   // Methods forced to be implemented on subclass.
   // --------------------------------------------
 
   protected buildAccessPointInfo(baseInfo: AccessPoint): AccessPoint {
-    baseInfo.function = ["register", "report"];
+    baseInfo.api = ["register", "report"];
     return baseInfo;
+  }
+
+  protected override initializeApiFunctionMap(): void {
+    super.initializeApiFunctionMap();
+    // Replace the standard function with the functions of the ServiceManager.
+    this.apis.register = this.registrar;
+    this.apis.report = this.gotReport;
   }
 
   protected override async initializingResources(): Promise<void> {
@@ -109,17 +162,17 @@ export class ServiceManager extends ServiceProvider {
     const netConfig = this.configManager.getCoreConfig().net;
     netConfig.sm_discovery = ServiceManagerDiscovery.None;
     this.logger.debug(
-      `ServiceManager discovery task is disabled for ${this.getArrowedIdentity()}.`,
+      `ServiceManager discovery task is disabled for ${this.getIdentity()}.`,
     );
   }
 
   protected override async starting(): Promise<void> {
-    await this.initializeTcpServer("register");
+    await this.setApiChannel(true);
     await this._initializeBroadcastListener("reception");
   }
 
   protected override async stopping(): Promise<void> {
-    return;
+    await this.setApiChannel(false);
   }
 
   // --------------------------------------------
@@ -134,8 +187,9 @@ export class ServiceManager extends ServiceProvider {
   private async _initializeBroadcastListener(name: string): Promise<void> {
     try {
       // Prepare the ServiceManager information.
-      const ap: AccessPoint = this.getTcpServerInfo("register");
-      const response: BroadcastResponse = {
+      const ap: AccessPoint = this.getTcpTaskInfo(this._TASK_CHANNEL_API);
+      const appConfig = this.configManager.getAppConfig();
+      const response: BroadcastResponse260321 = {
         manager: {
           ...this.PROTOCOL,
           provider: {
@@ -143,6 +197,7 @@ export class ServiceManager extends ServiceProvider {
             ...ap,
           },
         },
+        redis: appConfig.redis,
       };
 
       // Construct the UDP broadcast server.
@@ -163,5 +218,34 @@ export class ServiceManager extends ServiceProvider {
       );
       throw error;
     }
+  }
+
+  private _putProvider(data: ApiCall): void {
+    const args = data.args;
+    const { name: svcName, id: svcId } = args.provider;
+
+    // Asume the svcId is unique from all providers.
+    // Store this provider to the _services map.
+    let svcGroup = this._services.get(svcName);
+    if (!svcGroup) {
+      svcGroup = {};
+      this._services.set(svcName, svcGroup);
+    }
+    svcGroup[svcId] = args;
+
+    // // Store this provider to the _instances map.
+    // let svcInst = this._instances.get(svcId);
+    // if (svcInst) {
+    //   const svcOrg = svcInst.provider.name;
+    //   const svcNew = args.provider.name;
+    //   if (svcNew !== svcOrg) {
+    //     const message = `The provider ID <${svcId}> is duplicated.`;
+    //     this.logger.error(
+    //       `${message}\nExisting service = <${svcOrg}>, new service = <${svcNew}>.`,
+    //     );
+    //     throw new Error(message);
+    //   }
+    // }
+    // this._instances.set(svcId, args); // Add or update this provider instance.
   }
 }

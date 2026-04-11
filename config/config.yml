@@ -1,4 +1,8 @@
 app:
+  redis:
+    address: redis.rd.enjo.tech
+    port: 6379
+    credential: 2ZBdfGH9AvSnFbDsH
   otel_metrics_enabled: false
   otel_metrics_port: 9464
   otel_traces_enabled: false
@@ -8,10 +12,17 @@ app:
 #   service_name: ServiceManager
 #   net:
 #     sm_discovery: UdpDiscovery
-#     tcp_address: 0.0.0.0
-#     tcp_port: 0
-#     udp_address: 0.0.0.0
-#     udp_port: 5707
+#     sm_port: 5707
+#     tcp:
+#       address: 0.0.0.0
+#       port: 0
+#       client:
+#         timeout: 10000
+#         keep_alive: true
+#         keep_alive_initial_delay: 0
+#     udp:
+#       address: 0.0.0.0
+#       port: 5707
 #   retry:
 #     backoff:
 #       enable: false

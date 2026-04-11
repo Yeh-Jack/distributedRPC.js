@@ -9,7 +9,8 @@ import { injectable } from "inversify";
 
 import { ConfigManager } from "../common/config";
 import { UdpServer } from "../network/udp-server";
-import { BroadcastResponse, PROBE_MESSAGE } from "../types/basal-protocol";
+import { PROBE_MESSAGE } from "../types/basal-protocol";
+import { BroadcastResponse260321 } from "../manager/api-spec-260321";
 import { OtelTracer } from "../metrics/otel-tracing";
 import { NetworkDirection } from "./network-events";
 import {
@@ -56,7 +57,7 @@ import {
  */
 @injectable()
 export class BroadcastUdpServer extends UdpServer {
-  private _managerInfo: BroadcastResponse | undefined = undefined;
+  private _managerInfo: BroadcastResponse260321 | undefined = undefined;
   private _responseBuffer!: Buffer;
 
   constructor(
@@ -73,7 +74,7 @@ export class BroadcastUdpServer extends UdpServer {
    *
    * @param info The information of the ServiceManager.
    */
-  public setManagerInfo(info: BroadcastResponse) {
+  public setManagerInfo(info: BroadcastResponse260321) {
     this._managerInfo = info;
   }
 

@@ -127,9 +127,10 @@ npx prettier --write src/**/*.{ts,js,json}
 - Don't ignore caught exceptions unless explicitly documented
 
 ### Documentation
-- Add TypeDoc comments to all public and protected APIs and complex methods
+- Stick to JSON Schema Draft 7 and supports OpenAPI 3.1.
+- Add comments to all public and protected APIs and complex methods
 - Document parameters, return values, and potential exceptions
-- Use TypeDoc compatible formatting for automatic documentation generation
+- Use OpenAPI 3.1 compatible formatting for automatic documentation generation
 
 ## Testing Guidelines
 

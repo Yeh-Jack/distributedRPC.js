@@ -6,6 +6,7 @@ import {
   AppEnv,
   ServiceManagerDiscovery,
   getAppEnv,
+  SECOND,
   UNKNOWN_ATTRIBUTE,
 } from "../types/basal-protocol";
 
@@ -22,20 +23,34 @@ export interface AppConfig {}
 /**
  * Configuration options for the core distributed RPC service.
  *
- * @property net.tcp_address - TCP binding address. Defaults to "0.0.0.0".
- * @property net.tcp_port - TCP listening port. Defaults to 0 which finds a random available port.
- * @property net.udp_address - UDP binding address. Defaults to "0.0.0.0".
- * @property net.udp_port - UDP listening port. Defaults to 5707 for discovering ServiceManager.
+ * @property net.tcp.address - TCP binding address. Defaults to "0.0.0.0".
+ * @property net.tcp.port - TCP listening port. Defaults to 0 which finds a random available port.
+ * @property net.tcp.client.timeout - TCP client connection timeout in milliseconds. Defaults to 10000ms.
+ * @property net.tcp.client.keep_alive - Whether to enable TCP keep-alive. Defaults to false.
+ * @property net.tcp.client.keep_alive_initial_delay - TCP keep-alive initial delay in milliseconds. Defaults to 0.
+ * @property net.sm_port - ServiceManager discovery UDP port. Defaults to 5707.
+ * @property net.udp.address - UDP binding address. Defaults to "0.0.0.0".
+ * @property net.udp.port - UDP listening port. Defaults to 5707 for discovering ServiceManager.
  * @property retry - Retry configurations.
  * @property service_name - Name of the service. Preferably without spaces.
  */
 export interface CoreConfig {
   net: {
     sm_discovery: symbol;
-    tcp_address: string;
-    tcp_port: number;
-    udp_address: string;
-    udp_port: number;
+    sm_port: number;
+    tcp: {
+      address: string;
+      port: number;
+      client: {
+        timeout: number;
+        keep_alive: boolean;
+        keep_alive_initial_delay: number;
+      };
+    };
+    udp: {
+      address: string;
+      port: number;
+    };
   };
   retry: RetryConfig;
   service_name: string;
@@ -125,9 +140,9 @@ export interface ProviderConfig<
  *     return this.getConfig().core.service_name;
  *   }
  *
- *   getTcpPort(): number {
- *     return this.getConfig().core.net.tcp_port;
- *   }
+ * getTcpPort(): number {
+ * return this.getConfig().core.net.tcp.port;
+ * }
  * }
  *
  * // Use in services
@@ -246,14 +261,23 @@ export class ConfigManager<
 
   protected getDefaultCoreConfig(): T_Core {
     const NIC_ADDRESS = "0.0.0.0"; // Bind on all NICs.
-    const SECOND = 1000;
     return {
       net: {
         sm_discovery: ServiceManagerDiscovery.UDP,
-        tcp_address: NIC_ADDRESS,
-        tcp_port: 0, // Random allocated.
-        udp_address: NIC_ADDRESS,
-        udp_port: DEFAULT_DISCOVERY_PORT,
+        sm_port: DEFAULT_DISCOVERY_PORT,
+        tcp: {
+          address: NIC_ADDRESS,
+          port: 0, // Random allocated.
+          client: {
+            timeout: 10 * SECOND,
+            keep_alive: true,
+            keep_alive_initial_delay: 0,
+          },
+        },
+        udp: {
+          address: NIC_ADDRESS,
+          port: DEFAULT_DISCOVERY_PORT,
+        },
       },
       retry: {
         interval: 2 * SECOND,

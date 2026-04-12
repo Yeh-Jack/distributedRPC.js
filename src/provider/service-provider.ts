@@ -1,4 +1,4 @@
-import { injectable } from "inversify";
+import { inject, injectable } from "inversify";
 import { DetectedResourceAttributes } from "@opentelemetry/resources";
 import {
   ATTR_SERVICE_NAME,
@@ -14,13 +14,13 @@ import {
   AppEnv,
   BasalProtocol,
   ExecutionState,
+  IdGenerator,
   NetworkProtocol,
   PeerIdentity,
   ProviderConnectInfo,
   RegisterInfo,
   ResponseArgs,
   SocketAddress,
-  generateInstanceId,
   getAppEnv,
   DEFAULT_ENCODE,
   FOLLOW_UP,
@@ -33,6 +33,7 @@ import { TcpClient } from "../network/tcp-client";
 import {
   createNamedTcpServer,
   createServiceManagerDiscover,
+  TYPES,
 } from "../aop/container";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
@@ -58,20 +59,9 @@ export class ServiceProvider {
   protected readonly _TASK_CHANNEL_API: string = "_chnAPI";
   protected readonly _TASK_CHANNEL_RESPONSE: string = "_chnResponse";
   protected readonly _TASK_MANAGER: string = "_svcManager";
-  protected readonly PROTOCOL: BasalProtocol = {
-    protocol_ver: "1.0.0",
-    provider: {
-      id: generateInstanceId(),
-      name: this.constructor.name,
-      desc: "Unknown service provider.",
-      version: "1.0.0",
-    },
-    apis: {},
-  };
+  protected readonly PROTOCOL: BasalProtocol;
 
-  protected configManager: ConfigManager = new ConfigManager(
-    this.PROTOCOL.provider.name,
-  );
+  protected configManager: ConfigManager;
   protected logger!: ReturnType<LoggerManager["getLogger"]>;
   protected tasks: Map<string, any> = new Map(); // Internal tasks handler.
 
@@ -92,8 +82,24 @@ export class ServiceProvider {
 
   /**
    * Creates a ServiceProvider instance.
+   * @param idGenerator - The ID generator for creating message and instance IDs
    */
-  public constructor() {}
+  public constructor(
+    @inject(TYPES.IdGenerator) protected idGenerator: IdGenerator,
+  ) {
+    const serviceName = this.constructor.name;
+    this.PROTOCOL = {
+      protocol_ver: "1.0.0",
+      provider: {
+        id: this.idGenerator.shortId(),
+        name: serviceName,
+        desc: "Unknown service provider.",
+        version: "1.0.0",
+      },
+      apis: {},
+    };
+    this.configManager = new ConfigManager(serviceName);
+  }
 
   // This is the "Destructor"
   [Symbol.dispose]() {
@@ -234,6 +240,7 @@ export class ServiceProvider {
         this.configManager,
         pvdInfo,
         this.getPeerId(data, false),
+        this.idGenerator,
       );
 
       // Step 3 : Activate and store this channel.

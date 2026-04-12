@@ -10,6 +10,7 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc";
 
 import { TYPES } from "./di-types";
 import { ConfigManager } from "../common/config";
+import { DefaultIdGenerator } from "../common/id-generator";
 import { ExecutionMetrics } from "../metrics/exec-metrics";
 import { instrumentService } from "../aop/exec-time-interceptor";
 
@@ -18,7 +19,7 @@ import { ServiceProvider } from "../provider/service-provider";
 import { TcpServer } from "../network/tcp-server";
 import { UdpDiscovery } from "../network/udp-discovery";
 import { UdpServer } from "../network/udp-server";
-import { AppEnv } from "../types/basal-protocol";
+import { AppEnv, IdGenerator } from "../types/basal-protocol";
 
 export { TYPES };
 
@@ -27,6 +28,12 @@ export { TYPES };
  * All application dependencies are registered and resolved through this container.
  */
 export const container = new Container();
+
+// Bind IdGenerator as singleton using DefaultIdGenerator
+container
+  .bind<IdGenerator>(TYPES.IdGenerator)
+  .to(DefaultIdGenerator)
+  .inSingletonScope();
 
 /**
  * Creates a new named TCP server instance.
@@ -48,19 +55,6 @@ export function createNamedTcpServer(
   return new TcpServer(configManager, name);
 }
 
-/**
- * Creates a new named UDP server instance.
- * Use this factory function to acquire UDP server instances with specific names.
- * For broadcast server, use name "broadcast" to get a BroadcastUdpServer.
- *
- * @param name - Unique identifier for the server instance
- * @returns A new UdpServer instance with the given name, or BroadcastUdpServer if name is "broadcast"
- * @example
- * ```typescript
- * const udpServer = createNamedUdpServer("my-server");
- * await udpServer.start();
- * ```
- */
 /**
  * Creates a new named UDP server instance.
  * Use this factory function to acquire UDP server instances with specific names.

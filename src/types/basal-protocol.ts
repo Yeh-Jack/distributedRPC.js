@@ -1,5 +1,3 @@
-import { randomBytes } from "crypto";
-
 // Time unit constants.
 export const SECOND = 1000;
 export const MINUTE = 60 * SECOND;
@@ -96,11 +94,11 @@ export interface BasalProtocol {
    * Metadata of the service provider.
    *
    * @type {{
-   *     id: string; // A 16 bytes collision-resistant ephemeral ID. Generate it by `generateInstanceId()`.
-   *     name: string; // Name of the service provider.
-   *     desc: string; // Description of the service provider.
-   *     version: string; // Version of the service provider.
-   *   }}
+   * id: string; // A 16 bytes collision-resistant ephemeral ID. Generate it by `IdGenerator.shortId()`.
+   * name: string; // Name of the service provider.
+   * desc: string; // Description of the service provider.
+   * version: string; // Version of the service provider.
+   * }}
    */
   provider: {
     id: string;
@@ -127,6 +125,31 @@ export enum ExecutionState {
   Starting = "Starting",
   Stopping = "Stopping",
   Stopped = "Stopped",
+}
+
+/**
+ * Interface for ID generation strategies.
+ * Provides methods for generating different types of IDs used throughout the system.
+ *
+ * @public
+ * @interface
+ */
+export interface IdGenerator {
+  /**
+   * Generates a default format ID (typically UUID v4).
+   * Used for message IDs and other general-purpose identification.
+   *
+   * @returns {string} A unique identifier string
+   */
+  generate(): string;
+
+  /**
+   * Generates a fixed 16-byte ID.
+   * Used for instance IDs in the service provider protocol.
+   *
+   * @returns {string} A 16-character hexadecimal string (8 bytes timestamp + 4 bytes randomness)
+   */
+  shortId(): string;
 }
 
 /**
@@ -199,26 +222,6 @@ export interface SocketAddress {
   port: number;
   // Protocol of the connection.
   protocol: NetworkProtocol;
-}
-
-/**
- * Simple ID generator which creates 8 bytes of Timestamp (seconds) and 8 bytes of Randomness.
- * Because of the timestamp prefix, IDs are roughly sortable by creation time.
- *
- * @public
- * @returns {string}
- */
-export function generateInstanceId(): string {
-  // 1. Get current timestamp (seconds) - 4 bytes.
-  const ts = Math.floor(Date.now() / 1000)
-    .toString(16)
-    .padStart(8, "0");
-
-  // 2. Get 4 random bytes - converted to 8 hex chars.
-  const rand = randomBytes(4).toString("hex");
-
-  // Total 16 hex characters.
-  return `${ts}${rand}`;
 }
 
 /**

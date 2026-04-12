@@ -9,12 +9,14 @@ import { Span, SpanStatusCode } from "@opentelemetry/api";
 
 import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
+import { DefaultIdGenerator } from "../common/id-generator";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
 import {
   AccessPoint,
   ApiCall,
   ExecutionState,
+  IdGenerator,
   NetworkProtocol,
 } from "../types/basal-protocol";
 import { TypedEventEmitter } from "./typed-event-emitter";
@@ -32,7 +34,6 @@ import {
   NetworkPeer,
   NetworkRetryable,
 } from "./network-events";
-import { generateCorrelationId } from "../metrics/otel-resource";
 import { OtelTracer } from "../metrics/otel-tracing";
 import { ProviderState, DEFAULT_RESOURCE } from "../provider/provider-info";
 
@@ -87,6 +88,7 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
   private _accessPoint!: AccessPoint;
   private _connectionSpan?: Span;
   private _connectionStartTime?: number;
+  private _idGenerator: IdGenerator;
   private _socket: TcpSocket | undefined;
   private _tracer: OtelTracer;
   private _writeSpan?: Span;
@@ -95,20 +97,22 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
    * Creates a new TCP client instance.
    *
    * @param configManager - The configuration manager for retrieving service settings.
-   * @param name - Optional name to identify this client instance. Defaults to "tcp-client".
    * @param ap - The AccessPoint containing host and port to connect to.
-   * @param options - Optional configuration options for the TCP client.
+   * @param name - Optional name to identify this client instance. Defaults to "tcp-client".
+   * @param idGenerator - Optional ID generator for creating message IDs. Defaults to DefaultIdGenerator.
    */
   constructor(
     configManager: ConfigManager,
     ap: AccessPoint,
     name: string = "tcp-client",
+    idGenerator?: IdGenerator,
   ) {
     super();
     this.configManager = configManager;
     this.logger = configManager.getLogger();
     this.name = name;
     this._accessPoint = ap;
+    this._idGenerator = idGenerator || new DefaultIdGenerator();
     this._tracer = OtelTracer.getInstance(
       name,
       new ProviderState(DEFAULT_RESOURCE),
@@ -156,7 +160,7 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
     if (message.msgId) {
       msgId = message.msgId;
     } else {
-      msgId = generateCorrelationId();
+      msgId = this._idGenerator.generate();
       message.msgId = msgId;
     }
     return this.writeWithId(JSON.stringify(message), msgId);
@@ -184,7 +188,7 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
     const config = this.configManager.getCoreConfig();
     const retryConfig = config.retry;
 
-    const connectionId = generateCorrelationId();
+    const connectionId = this._idGenerator.generate();
     this.logger = this.configManager.getLogger();
     this._abortController = new AbortController();
 
@@ -285,7 +289,7 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
    * @returns Promise that resolves with the msgId (correlationId) when data is written.
    */
   public async write(data: Buffer | string): Promise<string> {
-    const msgId = generateCorrelationId();
+    const msgId = this._idGenerator.generate();
     return this.writeWithId(data, msgId);
   }
 

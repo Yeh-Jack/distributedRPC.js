@@ -1,5 +1,5 @@
 import { Server } from "net";
-import { injectable } from "inversify";
+import { inject, injectable } from "inversify";
 
 import { TYPES } from "../aop/di-types";
 import { createNamedUdpServer } from "../aop/container";
@@ -12,12 +12,12 @@ import {
   AckType,
   ApiCall,
   BasalProtocol,
+  IdGenerator,
   PeerIdentity,
   ProviderConnectInfo,
   RegisterInfo,
   ResponseArgs,
   ServiceManagerDiscovery,
-  generateInstanceId,
   FOLLOW_UP,
 } from "../types/basal-protocol";
 import {
@@ -61,18 +61,9 @@ import {
  */
 @injectable()
 export class ServiceManager extends ServiceProvider {
-  protected readonly PROTOCOL: BasalProtocol & SpecServiceManager260321 = {
-    provider: {
-      id: generateInstanceId(),
-      name: this.constructor.name,
-      desc: "Service Manager for orchestrating services.",
-      version: "1.0.0",
-    },
-    ...SPEC_SVC_MGR_260321,
-  };
-
-  protected override configManager: ServiceManagerConfig =
-    new ServiceManagerConfig(this.PROTOCOL.provider.name);
+  protected override readonly PROTOCOL: BasalProtocol &
+    SpecServiceManager260321;
+  protected override configManager: ServiceManagerConfig;
 
   private _services: Map<string, any> = new Map();
   // private _instances: Map<string, any> = new Map();
@@ -81,9 +72,23 @@ export class ServiceManager extends ServiceProvider {
 
   /**
    * Creates a ServiceManager instance.
+   * @param idGenerator - The ID generator for creating message and instance IDs
    */
-  public constructor() {
-    super();
+  public constructor(
+    @inject(TYPES.IdGenerator) protected idGenerator: IdGenerator,
+  ) {
+    super(idGenerator);
+    const serviceName = this.constructor.name;
+    this.PROTOCOL = {
+      ...SPEC_SVC_MGR_260321,
+      provider: {
+        id: idGenerator.shortId(),
+        name: serviceName,
+        desc: "Service Manager for orchestrating services.",
+        version: "1.0.0",
+      },
+    };
+    this.configManager = new ServiceManagerConfig(serviceName);
   }
 
   protected override async askProviderInfo(

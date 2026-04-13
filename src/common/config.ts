@@ -52,6 +52,7 @@ export interface CoreConfig {
       port: number;
     };
   };
+  report: ReportConfig;
   retry: RetryConfig;
   service_name: string;
   provider_id: string; // Value assigned at ServiceProvider._updateProviderInfo().
@@ -73,22 +74,37 @@ export interface LogConfig {
 }
 
 /**
+ * Configuration options for report scheduling.
+ *
+ * @property enabled - Whether report scheduling is enabled. Defaults to true.
+ * @property interval - Report interval in seconds. Defaults to 60.
+ * @property max_retries - Maximum retry attempts for a single report. Defaults to 3.
+ * @property retry_delay - Delay between retries in seconds. Defaults to 5.
+ */
+export interface ReportConfig {
+  enabled: boolean;
+  interval: number;
+  max_retries: number;
+  retry_delay: number;
+}
+
+/**
  * Configuration options for retry jobs.
  *
- * @property backoff.enable - Enable retry backoff or not. Defaults to false.
+ * @property backoff.enabled - Enable retry backoff or not. Defaults to false.
  * @property backoff.max_delay - Max delay of retry interval. Defaults to 4 minutes.
  * @property backoff.multiplier - Multiplier for increase retry interval. Must be greater than 1, defaults to 2.
  * @property interval - Retry interval in milliseconds. Defaults to 2000 ms.
- * @property max_try - Maximum retry attempts. Defaults to 0 which means infinite retries.
+ * @property max_retries - Maximum retry attempts. Defaults to 0 which means infinite retries.
  */
 export interface RetryConfig {
   backoff: {
-    enable: boolean;
+    enabled: boolean;
     max_delay: number;
     multiplier: number;
   };
   interval: number;
-  max_try?: number;
+  max_retries?: number;
 }
 
 /**
@@ -271,7 +287,7 @@ export class ConfigManager<
           client: {
             timeout: 10 * SECOND,
             keep_alive: true,
-            keep_alive_initial_delay: 0,
+            keep_alive_initial_delay: 0 * SECOND,
           },
         },
         udp: {
@@ -279,10 +295,17 @@ export class ConfigManager<
           port: DEFAULT_DISCOVERY_PORT,
         },
       },
+      report: {
+        enabled: true,
+        interval: 60 * SECOND,
+        max_retries: 3,
+        retry_delay: 5 * SECOND,
+      },
       retry: {
         interval: 2 * SECOND,
-        max_try: 0, // Infinity.
+        max_retries: 0, // Infinity.
         backoff: {
+          enabled: true,
           max_delay: 4 * 60 * SECOND, // 4 minutes.
           multiplier: DEFAULT_RETRY_MULTIPLIER,
         },

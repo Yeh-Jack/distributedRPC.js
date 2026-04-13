@@ -92,6 +92,8 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
   private _socket: TcpSocket | undefined;
   private _tracer: OtelTracer;
   private _writeSpan?: Span;
+  private _txBytes: number = 0; // Track transmitted bytes
+  private _rxBytes: number = 0; // Track received bytes
 
   /**
    * Creates a new TCP client instance.
@@ -131,17 +133,29 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
   }
 
   /**
+   * Returns the total bytes received by this client.
+   *
+   * @returns Total received bytes
+   */
+  public getRxBytes(): number {
+    return this._rxBytes;
+  }
+
+  /**
    * Returns the underlying TCP socket.
    *
    * @throws Error if the client is not connected.
    */
   public getSocket(): TcpSocket {
-    if (!this._socket || this._state !== ExecutionState.Running) {
-      throw new Error(
-        `The ${this.getArrowedName()} TCP client is not connected. Call connect() first.`,
-      );
+    if (
+      this._socket &&
+      [ExecutionState.Running, ExecutionState.Starting].includes(this._state)
+    ) {
+      return this._socket;
     }
-    return this._socket;
+    throw new Error(
+      `The ${this.getArrowedName()} TCP client is not connected. Call connect() first.`,
+    );
   }
 
   /**
@@ -149,6 +163,23 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
    */
   public getState(): ExecutionState {
     return this._state;
+  }
+
+  /**
+   * Returns the total bytes transmitted by this client.
+   *
+   * @returns Total transmitted bytes
+   */
+  public getTxBytes(): number {
+    return this._txBytes;
+  }
+
+  /**
+   * Resets the byte counters.
+   */
+  public resetByteCounters(): void {
+    this._txBytes = 0;
+    this._rxBytes = 0;
   }
 
   /**
@@ -209,7 +240,7 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
 
     this._retryScheduler = new RetryScheduler(() => this._attemptConnect(), {
       interval: retryConfig.interval,
-      max_try: retryConfig.max_try,
+      max_retries: retryConfig.max_retries,
       backoff: retryConfig.backoff,
       signal: this._abortController.signal,
       onRetry: (ctx) => {
@@ -335,6 +366,7 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
           );
           reject(err);
         } else {
+          this._txBytes += data.length;
           bytesCounter.add(data.length, {
             protocol: NetworkProtocol.TCP,
             direction: NetworkDirection.Out,
@@ -348,7 +380,7 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
           this._writeSpan?.end();
           this._writeSpan = undefined;
 
-          this.logger.debug(
+          this.logger.silly(
             `Wrote ${data.length} bytes to ${this.getArrowedName()}`,
           );
           resolve(msgId);
@@ -443,6 +475,8 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
    * Handles incoming data from the server.
    */
   protected handleData(data: Buffer): void {
+    this._rxBytes += data.length;
+
     const readSpan = this._tracer.createNetworkSpan("read", {
       address: this._accessPoint.address,
       port: this._accessPoint.port,

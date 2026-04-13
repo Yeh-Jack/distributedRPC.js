@@ -52,6 +52,21 @@ export interface ApiCall {
   };
 }
 
+/**
+ * API counter statistics for tracking request outcomes.
+ *
+ * @property success - Number of successful requests
+ * @property invalidRequest - Number of requests with invalid data/format
+ * @property failedOnProcess - Number of requests that failed during processing
+ * @property total - Total number of requests (optional, calculated from sum of others)
+ */
+export interface ApiCounter {
+  success: number;
+  invalidRequest: number;
+  failedOnProcess: number;
+  total?: number;
+}
+
 // Interface or type name for an API format.
 export interface ApiSpec {
   request: string;
@@ -187,6 +202,32 @@ export type ProviderConnectInfo = AccessPoint & BasalProtocol["provider"];
  */
 export interface RegisterInfo extends BasalProtocol {
   provider: BasalProtocol["provider"] & AccessPoint;
+}
+
+/**
+ * Report data structure containing system metrics for a service provider.
+ *
+ * @property timestamp - Unix timestamp when the report was generated
+ * @property ramUsed - RAM used by the provider process in MB
+ * @property ramFree - Free RAM on the system in MB
+ * @property cpuLoad - CPU load percentage (0-100)
+ * @property netTx - Total network transmission with auto-scaled unit (B, KB, MB, GB)
+ * @property netTxBytes - Raw network transmission in bytes
+ * @property netRx - Total network received with auto-scaled unit (B, KB, MB, GB)
+ * @property netRxBytes - Raw network received in bytes
+ * @property apiCounter - API call statistics per endpoint (optional, only for providers with API counters)
+ */
+export interface ReportData {
+  timestamp: number;
+  state: ExecutionState;
+  ramUsed: number;
+  ramFree: number;
+  cpuLoad: number;
+  netTx: string;
+  netTxBytes: number;
+  netRx: string;
+  netRxBytes: number;
+  apiCounter?: Map<string, Omit<ApiCounter, "total">>;
 }
 
 export interface ResponseArgs {

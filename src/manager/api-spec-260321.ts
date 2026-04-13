@@ -36,6 +36,11 @@ export interface SpecServiceManager260321 {
       request: "RegisterInfo";
       ack: AckType.Single;
     };
+    report: ApiSpec & {
+      request: "ReportData";
+      response: typeof NO_RESPONSE;
+      ack: AckType.None;
+    };
   };
 }
 
@@ -51,6 +56,11 @@ export const SPEC_SVC_MGR_260321: SpecServiceManager260321 = {
       request: "RegisterInfo",
       response: NO_RESPONSE,
       ack: AckType.Single,
+    },
+    report: {
+      request: "ReportData",
+      response: NO_RESPONSE,
+      ack: AckType.None,
     },
   },
 };

@@ -154,7 +154,7 @@ export class UdpClient extends TypedEventEmitter<NetworkEventMap> {
 
     this._retryScheduler = new RetryScheduler(() => this._attemptBind(), {
       interval: retryConfig.interval,
-      max_try: retryConfig.max_try,
+      max_retries: retryConfig.max_retries,
       backoff: retryConfig.backoff,
       signal: this._abortController.signal,
       onRetry: (ctx) => {

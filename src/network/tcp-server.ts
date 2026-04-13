@@ -85,6 +85,8 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   private _port!: number;
 
   private _sockets: Set<TcpSocket> = new Set();
+  private _txBytes: number = 0; // Track transmitted bytes
+  private _rxBytes: number = 0; // Track received bytes
 
   /**
    * Creates a new TCP server instance.
@@ -111,12 +113,44 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   // -------------------------------
 
   /**
+   * Broadcasts data to all connected clients.
+   *
+   * @param data - The data to broadcast
+   * @returns Total bytes written
+   */
+  public broadcast(data: Buffer | string): number {
+    const dataBuffer = typeof data === "string" ? Buffer.from(data) : data;
+    let totalWritten = 0;
+
+    for (const socket of this._sockets) {
+      if (!socket.destroyed) {
+        const written = socket.write(dataBuffer);
+        if (written) {
+          totalWritten += dataBuffer.length;
+        }
+      }
+    }
+
+    this._txBytes += totalWritten;
+    return totalWritten;
+  }
+
+  /**
    * Returns the port the server is listening on.
    *
    * @returns The port number (dynamically assigned if configured port is 0).
    */
   public getPort(): number {
     return this._port;
+  }
+
+  /**
+   * Returns the total bytes received by this server.
+   *
+   * @returns Total received bytes
+   */
+  public getRxBytes(): number {
+    return this._rxBytes;
   }
 
   /**
@@ -134,6 +168,23 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
    */
   public getState(): ExecutionState {
     return this._state;
+  }
+
+  /**
+   * Returns the total bytes transmitted by this server.
+   *
+   * @returns Total transmitted bytes
+   */
+  public getTxBytes(): number {
+    return this._txBytes;
+  }
+
+  /**
+   * Resets the byte counters.
+   */
+  public resetByteCounters(): void {
+    this._txBytes = 0;
+    this._rxBytes = 0;
   }
 
   /**
@@ -171,7 +222,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
 
     this._retryScheduler = new RetryScheduler(() => this._attemptListen(), {
       interval: retryConfig.interval,
-      max_try: retryConfig.max_try,
+      max_retries: retryConfig.max_retries,
       backoff: retryConfig.backoff,
       signal: this._abortController.signal,
       onRetry: (ctx) => {
@@ -437,7 +488,10 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     data: string | Buffer,
     connectionInfo: any,
   ): void {
-    bytesCounter.add(data.length, connectionInfo);
+    const dataLength =
+      typeof data === "string" ? Buffer.byteLength(data) : data.length;
+    this._rxBytes += dataLength;
+    bytesCounter.add(dataLength, connectionInfo);
     this.emit(NetworkEvent.Data, { peer, data });
   }
 

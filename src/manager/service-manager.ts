@@ -16,6 +16,7 @@ import {
   PeerIdentity,
   ProviderConnectInfo,
   RegisterInfo,
+  ReportData,
   ResponseArgs,
   ServiceManagerDiscovery,
   FOLLOW_UP,
@@ -66,7 +67,7 @@ export class ServiceManager extends ServiceProvider {
   protected override configManager: ServiceManagerConfig;
 
   private _services: Map<string, any> = new Map();
-  // private _instances: Map<string, any> = new Map();
+  private _reports: Map<string, Map<string, ReportData[]>> = new Map();
 
   // Resources should be released during shutdown.
 
@@ -94,14 +95,57 @@ export class ServiceManager extends ServiceProvider {
   protected override async askProviderInfo(
     data: ApiCall,
   ): Promise<ProviderConnectInfo | undefined> {
-    const register: RegisterInfo | undefined = this.getProvider(data.peer);
+    const register: RegisterInfo | undefined = this.getRegisterInfo(data.peer);
     return register ? register.provider : undefined;
   }
 
-  protected getProvider(peer: PeerIdentity): RegisterInfo | undefined {
+  /**
+   * Clears all reports for a specific provider instance.
+   *
+   * @param peer - The peer identity containing service name and instance ID
+   */
+  public clearReports(peer: PeerIdentity): void {
+    const serviceGroup = this._reports.get(peer.service);
+    if (serviceGroup) {
+      serviceGroup.delete(peer.instance);
+      if (serviceGroup.size === 0) {
+        this._reports.delete(peer.service);
+      }
+    }
+  }
+
+  protected getRegisterInfo(peer: PeerIdentity): RegisterInfo | undefined {
     const svcGroup = this._services.get(peer.service);
     if (!svcGroup) return;
     return svcGroup[peer.instance];
+  }
+
+  /**
+   * Gets all registered services with their instance IDs.
+   *
+   * @returns Array of peer identities
+   */
+  public getReportedInstances(): PeerIdentity[] {
+    const instances: PeerIdentity[] = [];
+    for (const [serviceName, serviceGroup] of this._reports.entries()) {
+      for (const instanceId of serviceGroup.keys()) {
+        instances.push({ service: serviceName, instance: instanceId });
+      }
+    }
+    return instances;
+  }
+
+  /**
+   * Gets all reports for a specific provider instance.
+   *
+   * @param peer - The peer identity containing service name and instance ID
+   * @returns Array of ReportData or empty array if no reports exist
+   */
+  public getReports(peer: PeerIdentity): ReportData[] {
+    const serviceGroup = this._reports.get(peer.service);
+    if (!serviceGroup) return [];
+
+    return serviceGroup.get(peer.instance) || [];
   }
 
   /**
@@ -128,8 +172,64 @@ export class ServiceManager extends ServiceProvider {
   // API functions.
   // --------------------------------------------
 
+  /**
+   * Receives and stores report data from service providers.
+   *
+   * @param data - The API call containing report data
+   */
   public async gotReport(data: ApiCall): Promise<void> {
-    //TODO
+    const from = this.getPeerId(data);
+    const reportData: ReportData = data.args;
+
+    if (!reportData || typeof reportData !== "object") {
+      this.logger.warn(`Invalid report data received from ${from}`);
+      return;
+    }
+
+    // Get service and instance info from the peer
+    const { service, instance } = data.peer;
+
+    // Initialize service group if not exists
+    let serviceGroup = this._reports.get(service);
+    if (!serviceGroup) {
+      serviceGroup = new Map();
+      this._reports.set(service, serviceGroup);
+    }
+
+    // Get instance reports array
+    let instanceReports = serviceGroup.get(instance);
+    if (!instanceReports) {
+      instanceReports = [];
+      serviceGroup.set(instance, instanceReports);
+    }
+
+    // Store the report
+    instanceReports.push(reportData);
+
+    // Keep only last 60 reports to prevent memory bloat
+    if (instanceReports.length > 60) {
+      instanceReports.shift();
+    }
+
+    this.logger.silly(
+      `${FOLLOW_UP}Report received from ${from}: RAM=${reportData.ramUsed}MB, Free=${reportData.ramFree}MB, CPU=${reportData.cpuLoad}%, NetTx=${reportData.netTx}`,
+    );
+  }
+
+  /**
+   * Gets the latest report for a specific provider instance.
+   *
+   * @param peer - The peer identity containing service name and instance ID
+   * @returns The latest ReportData or undefined if no reports exist
+   */
+  public getLatestReport(peer: PeerIdentity): ReportData | undefined {
+    const serviceGroup = this._reports.get(peer.service);
+    if (!serviceGroup) return undefined;
+
+    const instanceReports = serviceGroup.get(peer.instance);
+    if (!instanceReports || instanceReports.length === 0) return undefined;
+
+    return instanceReports[instanceReports.length - 1];
   }
 
   protected async registrar(data: ApiCall): Promise<void> {
@@ -237,20 +337,5 @@ export class ServiceManager extends ServiceProvider {
       this._services.set(svcName, svcGroup);
     }
     svcGroup[svcId] = args;
-
-    // // Store this provider to the _instances map.
-    // let svcInst = this._instances.get(svcId);
-    // if (svcInst) {
-    //   const svcOrg = svcInst.provider.name;
-    //   const svcNew = args.provider.name;
-    //   if (svcNew !== svcOrg) {
-    //     const message = `The provider ID <${svcId}> is duplicated.`;
-    //     this.logger.error(
-    //       `${message}\nExisting service = <${svcOrg}>, new service = <${svcNew}>.`,
-    //     );
-    //     throw new Error(message);
-    //   }
-    // }
-    // this._instances.set(svcId, args); // Add or update this provider instance.
   }
 }

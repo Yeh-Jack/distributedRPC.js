@@ -1,3 +1,4 @@
+import * as os from "os";
 import { inject, injectable } from "inversify";
 import { DetectedResourceAttributes } from "@opentelemetry/resources";
 import {
@@ -10,6 +11,7 @@ import {
   AckType,
   AckValue,
   ApiCall,
+  ApiCounter,
   ApiSpec,
   AppEnv,
   BasalProtocol,
@@ -19,6 +21,7 @@ import {
   PeerIdentity,
   ProviderConnectInfo,
   RegisterInfo,
+  ReportData,
   ResponseArgs,
   SocketAddress,
   getAppEnv,
@@ -79,6 +82,8 @@ export class ServiceProvider {
   private _managerInfo: BroadcastResponse260321[] = [];
   private _providerState!: ProviderState;
   private _registering: boolean = false;
+  private _reportTimer: NodeJS.Timeout | null = null;
+  private _apiCounter: Map<string, Omit<ApiCounter, "total">> = new Map();
 
   /**
    * Creates a ServiceProvider instance.
@@ -113,14 +118,19 @@ export class ServiceProvider {
   protected async ask(
     helper: TcpClient,
     message: ApiCall,
-  ): Promise<{ msgId: string; promise: Promise<any> }> {
+    ackType: AckType,
+  ): Promise<{ msgId: string; promise?: Promise<any> }> {
     const msgId = await helper.sendMessage(message);
+    this.polReqs.set(msgId, message);
+    if (ackType === AckType.None) {
+      return { msgId };
+    }
+
     const { promise, resolve, reject } = Promise.withResolvers();
     message.promise = {
       resolve: resolve,
       reject: reject,
     };
-    this.polReqs.set(msgId, message);
     return { msgId, promise };
   }
 
@@ -158,6 +168,16 @@ export class ServiceProvider {
       [ATTR_DEPLOY_ENV]: getAppEnv() || AppEnv.development,
     };
     return resource;
+  }
+
+  /**
+   * Utility delay function.
+   *
+   * @param ms - Milliseconds to delay
+   * @returns Promise that resolves after the delay
+   */
+  protected delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   public getConfigManager(): ConfigManager {
@@ -328,14 +348,46 @@ export class ServiceProvider {
    * @param name - Unique name for this listener.
    * @returns Promise that resolves when the listener is started.
    */
-  protected async initializeTcpServer(name: string): Promise<any> {
+  protected async initializeTcpClient(
+    name: string,
+    ap?: AccessPoint,
+  ): Promise<TcpClient> {
     try {
-      const tcpServer: TcpServer = createNamedTcpServer(
-        this.configManager,
-        name,
+      let tcpClient: TcpClient = this.tasks.get(name);
+      if (tcpClient) return tcpClient;
+
+      if (!ap) {
+        throw new Error("Missing AccessPoint argument.");
+      }
+
+      tcpClient = new TcpClient(this.configManager, ap, name, this.idGenerator);
+      this.tasks.set(name, tcpClient);
+      await tcpClient.start();
+      return tcpClient;
+    } catch (error) {
+      this.logger.error(
+        `Failed to initialize the <${name}> TCP client: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
       );
-      await tcpServer.start();
+      throw error;
+    }
+  }
+
+  /**
+   * Initializes and starts a TCP server.
+   *
+   * @param name - Unique name for this listener.
+   * @returns Promise that resolves when the listener is started.
+   */
+  protected async initializeTcpServer(name: string): Promise<TcpServer> {
+    try {
+      let tcpServer: TcpServer = this.tasks.get(name);
+      if (tcpServer) return tcpServer;
+
+      tcpServer = createNamedTcpServer(this.configManager, name);
       this.tasks.set(name, tcpServer);
+      await tcpServer.start();
       return tcpServer;
     } catch (error) {
       this.logger.error(
@@ -356,10 +408,11 @@ export class ServiceProvider {
 
   public async register(): Promise<void> {
     const smTask = this.tasks.get(this._TASK_MANAGER);
-    if (this._registering || !(smTask && smTask instanceof TcpClient)) return;
+    if (this._registering || !(smTask instanceof TcpClient)) return;
 
     this.logger.info(`Registering this provider to the service manager ...`);
     this._registering = true;
+    const ackType = this._manager.manager.apis.register.ack;
     const ap: AccessPoint = this.getTcpTaskInfo(this._TASK_CHANNEL_RESPONSE);
     const regInfo: RegisterInfo = {
       ...this.PROTOCOL,
@@ -373,24 +426,31 @@ export class ServiceProvider {
     this.logger.silly(
       `Register information :\n${JSON.stringify(apiData, undefined, 2)}`,
     );
-    const { msgId, promise } = await this.ask(smTask, apiData);
-
-    promise
-      .then(({ response, request }: { response: Buffer; request: ApiCall }) => {
-        const ack: string = response ? response.toString() : "";
-        this.logger.info(
-          `${FOLLOW_UP}Register to the service manager: <${ack}>.`,
-        );
-        // await this._testRegistered(smTask, msgId);
-      })
-      .catch(({ err, request }: { err: Buffer; request: ApiCall }) => {
-        this.logger.warn(
-          `${FOLLOW_UP}Error on <register:${msgId}>: ${err.toString()}`,
-        );
-      })
-      .finally(() => {
-        this._registering = false;
-      });
+    const { msgId, promise } = await this.ask(smTask, apiData, ackType);
+    if (promise)
+      promise
+        .then(
+          async ({
+            response,
+            request,
+          }: {
+            response: Buffer;
+            request: ApiCall;
+          }) => {
+            const ack: string = response ? response.toString() : "";
+            this.logger.info(
+              `${FOLLOW_UP}Register to the service manager: <${ack}>.`,
+            );
+          },
+        )
+        .catch(({ err, request }: { err: Buffer; request: ApiCall }) => {
+          this.logger.warn(
+            `${FOLLOW_UP}Error on <register:${msgId}>: ${err.toString()}`,
+          );
+        })
+        .finally(() => {
+          this._registering = false;
+        });
   }
 
   /**
@@ -402,13 +462,52 @@ export class ServiceProvider {
     this.configManager.reload();
     this._setConfigManager(this.configManager);
 
-    this.logger.silly(`Reloading in subclass ...`);
+    this.logger.debug(`Reloading in subclass ...`);
     await this.reloading();
-    this.logger.silly(`${FOLLOW_UP}Subclass reloaded.`);
+    this.logger.debug(`${FOLLOW_UP}Subclass reloaded.`);
   }
 
+  /**
+   * Reports current runtime metrics to the ServiceManager.
+   * Includes RAM consumption, free RAM, CPU load, and network transmission.
+   *
+   * @returns Promise that resolves when report is sent
+   */
   public async report(): Promise<void> {
-    // TODO
+    const smTask = this.tasks.get(this._TASK_MANAGER);
+    if (!(smTask instanceof TcpClient)) return;
+    this.logger.debug("Report current status to service mamanger ...");
+
+    const ackType = this._manager.manager.apis.report.ack;
+    const reportData = this._collectReportData();
+    const apiData: ApiCall = this.buildMessage("report", reportData);
+    const reportConfig = this.configManager.getCoreConfig().report;
+    const maxRetries = reportConfig?.max_retries ?? 3;
+    const retryDelay = reportConfig?.retry_delay ?? 5 * SECOND;
+
+    let attempt = 0;
+    let success = false;
+
+    while (attempt <= maxRetries && !success) {
+      try {
+        const { promise } = await this.ask(smTask, apiData, ackType);
+        if (promise) await promise;
+        this.logger.silly(`${FOLLOW_UP}Report sent successfully.`);
+        success = true;
+      } catch (err) {
+        attempt++;
+        if (attempt > maxRetries) {
+          this.logger.warn(
+            `${FOLLOW_UP}Failed to send report after ${maxRetries} retries.`,
+          );
+          break;
+        }
+        this.logger.debug(
+          `${FOLLOW_UP}Report attempt ${attempt} failed, retrying in ${retryDelay / SECOND} seconds ...`,
+        );
+        await this.delay(retryDelay);
+      }
+    }
   }
 
   protected async response(respArgs: ResponseArgs): Promise<void> {
@@ -463,7 +562,8 @@ export class ServiceProvider {
     await this.start();
   }
 
-  protected async setApiChannel(subscribe: boolean): Promise<any> {
+  // API channel (for listen on API request) could be TcpServer or Redis stream (scheduled development).
+  protected async setApiChannel(subscribe: boolean): Promise<TcpServer> {
     const task: TcpServer = await this.initializeTcpServer(
       this._TASK_CHANNEL_API,
     );
@@ -472,7 +572,22 @@ export class ServiceProvider {
     return task;
   }
 
-  protected async setResponseChannel(subscribe: boolean): Promise<any> {
+  // ServiceManager channel (for register and report) is a TcpClient.
+  protected async setManagerChannel(
+    subscribe: boolean,
+    ap?: AccessPoint,
+  ): Promise<TcpClient> {
+    const task: TcpClient = await this.initializeTcpClient(
+      this._TASK_MANAGER,
+      ap,
+    );
+    if (subscribe) task.on(NetworkEvent.Data, this._handleMgrResponse);
+    else task.off(NetworkEvent.Data, this._handleMgrResponse);
+    return task;
+  }
+
+  // API response channel (for response to request) is a TcpServer.
+  protected async setResponseChannel(subscribe: boolean): Promise<TcpServer> {
     const task: TcpServer = await this.initializeTcpServer(
       this._TASK_CHANNEL_RESPONSE,
     );
@@ -502,7 +617,8 @@ export class ServiceProvider {
    */
   public async shutdown(): Promise<void> {
     await this.stop();
-    await this._stopManagerTask(this._TASK_MANAGER);
+    await this._stopReportSchedule();
+    await this._stopManagerTask();
     await this._releaseResources();
     this.logger.info(`${this.getIdentity()} shutdown complete.`);
   }
@@ -527,10 +643,12 @@ export class ServiceProvider {
 
     this.setState(ExecutionState.Starting);
 
-    this.logger.silly(`Starting the service in subclass ...`);
+    this.logger.debug(`Starting the service in subclass ...`);
     await this.starting(); // Start services on subclass.
-    this.logger.silly(`${FOLLOW_UP}Service started in subclass.`);
+    this.logger.debug(`${FOLLOW_UP}Service started in subclass.`);
 
+    // Start automatic reporting.
+    await this._startReportSchedule();
     this.logger.info(`${this.getIdentity()} started successfully.`);
     this.setState(ExecutionState.Running);
   }
@@ -547,9 +665,9 @@ export class ServiceProvider {
     this.logger.info(`Stopping the ${this.getIdentity()} service ...`);
     this.setState(ExecutionState.Stopping);
 
-    this.logger.silly(`Stopping the service in subclass ...`);
+    this.logger.debug(`Stopping the service in subclass ...`);
     await this.stopping(); // Stop services on subclass.
-    this.logger.silly(`${FOLLOW_UP}Service stopped in subclass.`);
+    this.logger.debug(`${FOLLOW_UP}Service stopped in subclass.`);
 
     // Stop default services.
     const wait: Promise<void>[] = [];
@@ -561,8 +679,10 @@ export class ServiceProvider {
     }
     await Promise.all(wait);
 
+    await this._stopReportSchedule(); // Stop automatic reporting.
     this.logger.info(`${this.getIdentity()} stopped.`);
     this.setState(ExecutionState.Stopped);
+    await this.report(); // Report the last status.
   }
 
   // --------------------------------------------
@@ -622,33 +742,96 @@ export class ServiceProvider {
   // Private Methods
   // --------------------------------------------
 
+  /**
+   * Collects system metrics for the report.
+   * Sums up network transmission/received bytes from all TcpServer and TcpClient tasks.
+   *
+   * @returns ReportData containing current system metrics
+   */
+  protected _collectReportData(): ReportData {
+    const MB = 1024 * 1024;
+    const memUsage = process.memoryUsage();
+    const ramUsed = Math.round(memUsage.heapUsed / MB); // Convert to MB
+
+    const freeMem = os.freemem();
+    const ramFree = Math.round(freeMem / MB); // Convert to MB
+
+    // Calculate CPU load using 1-minute average
+    const cpuLoad = Math.round((os.loadavg()[0] * 100) / os.cpus().length);
+
+    // Sum up network bytes from all TcpServer and TcpClient tasks
+    let totalTxBytes = 0;
+    let totalRxBytes = 0;
+
+    for (const [name, task] of this.tasks.entries()) {
+      if (task instanceof TcpServer || task instanceof TcpClient) {
+        totalTxBytes += task.getTxBytes();
+        totalRxBytes += task.getRxBytes();
+      }
+    }
+
+    // Auto-scale network transmission / received
+    const networkRx = this._formatBytes(totalRxBytes);
+    const networkTx = this._formatBytes(totalTxBytes);
+
+    return {
+      timestamp: Date.now(),
+      state: this.getState(),
+      ramUsed,
+      ramFree,
+      cpuLoad,
+      netRx: networkRx,
+      netRxBytes: totalRxBytes,
+      netTx: networkTx,
+      netTxBytes: totalTxBytes,
+      apiCounter: this._apiCounter,
+    };
+  }
+
   private async _connectManager(): Promise<void> {
     if (this._managerInfo?.length < 1) return;
-    this._manager = { ...this._managerInfo[0] }; // Store received serive manager information.
-    const mgrAP: AccessPoint = this._manager.manager.provider;
-    this.logger.silly(
-      `ServiceManager info :\n${JSON.stringify(mgrAP, undefined, 2)}`,
-    );
-    const smTask: TcpClient = new TcpClient(
-      this.configManager,
-      mgrAP,
-      this._TASK_MANAGER,
-    );
-    this.tasks.set(this._TASK_MANAGER, smTask);
-    this._manager.instance = smTask; // Store the ServiceManager instance.
-    await smTask.start();
 
-    smTask.on(NetworkEvent.Data, this._handleMgrResponse);
+    this._manager = { ...this._managerInfo[0] }; // Store received serive manager information.
+    const ap: AccessPoint = this._manager.manager.provider;
+    this.logger.silly(
+      `ServiceManager info :\n${JSON.stringify(ap, undefined, 2)}`,
+    );
+    this._manager.instance = await this.setManagerChannel(true, ap);
+  }
+
+  /**
+   * Formats bytes to human-readable string with auto-scaled unit.
+   *
+   * @param bytes - Number of bytes
+   * @returns Formatted string with unit (B, KB, MB, GB)
+   */
+  private _formatBytes(bytes: number): string {
+    const units = ["B", "KB", "MB", "GB"];
+    let unitIndex = 0;
+    let size = bytes;
+
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex++;
+    }
+
+    return `${size.toFixed(2)} ${units[unitIndex]}`;
   }
 
   private _getSocketAddr(
     taskName: string = this._TASK_CHANNEL_RESPONSE,
   ): SocketAddress {
-    let addr,
+    let addr:
+        | {
+            address: string;
+            port: number;
+          }
+        | undefined,
       protocol: NetworkProtocol = NetworkProtocol.TCP;
     const task = this.getTask(taskName);
-    if (task instanceof TcpServer) addr = task.getServer()?.address();
-    else if (task instanceof TcpClient) addr = task.getSocket()?.address();
+    if (task instanceof TcpServer) addr = task.getServer()?.address() as any;
+    else if (task instanceof TcpClient)
+      addr = task.getSocket()?.address() as any;
     else {
       const message = `The <${taskName}> task is nither TCP server nor TCP client.`;
       this.logger.error(message);
@@ -668,35 +851,7 @@ export class ServiceProvider {
     return socketAddr;
   }
 
-  // private _handleApiRequest = (
-  //   peer: NetworkPeer,
-  //   raw: string | Buffer,
-  // ): void => {
-  //   if (!raw) return;
-  //   try {
-  //     const json: ApiCall = JSON.parse(data.toString());
-  //     const apiPath = json.api
-  //       .split("/") // Split the path by "/".
-  //       .filter(Boolean); // Remove all "falsy" (false, 0, "", null, undefined, and NaN) elements.
-  //     let tier: any = this.apis; // this.apis holds nested dynamic assigned functions.
-  //     for (const path of apiPath) {
-  //       if (!tier || typeof tier !== "object" || !(path in tier)) {
-  //         this.logger.warn(`API not found: ${json.api}`);
-  //         return;
-  //       }
-  //       tier = tier[path];
-  //     }
-  //     if (typeof tier !== "function") {
-  //       this.logger.warn(`Invalid API path: ${json.api}`);
-  //       return;
-  //     }
-  //     tier.call(this, peer, json);
-  //   } catch (err) {
-  //     this.logger.warn(`Invalid request: Incorrect JSON format.\n${data}`);
-  //   }
-  // };
-
-  private async _handleApiRequest(data: string | Buffer): Promise<void> {
+  private _handleApiRequest = async (data: string | Buffer): Promise<void> => {
     if (!data) {
       this.logger.debug(`Incomplete message received.`);
       return;
@@ -706,7 +861,7 @@ export class ServiceProvider {
     let errType: AckValue = AckValue.None;
     let json!: ApiCall;
     let result: any[] = [];
-    const message = data instanceof Buffer ? data.toString() : data;
+    const message = data instanceof Buffer ? data.toString() : (data as string);
     const pmsJob: Promise<any>[] = [];
     try {
       // 1. Parse the request.
@@ -742,6 +897,29 @@ export class ServiceProvider {
         }
       }
     } finally {
+      // Update API counter statistics
+      if (json?.api) {
+        const apiPath = json.api;
+        let counter = this._apiCounter.get(apiPath);
+        if (!counter) {
+          counter = {
+            success: 0,
+            invalidRequest: 0,
+            failedOnProcess: 0,
+          };
+          this._apiCounter.set(apiPath, counter);
+        }
+
+        // Increment appropriate counter based on error type
+        if (errType === AckValue.InvalidReqData) {
+          counter.invalidRequest++;
+        } else if (errType === AckValue.Error) {
+          counter.failedOnProcess++;
+        } else if (errType === AckValue.None) {
+          counter.success++;
+        }
+      }
+
       if (result.length > 1) {
         const respArgs: ResponseArgs = {
           apiSpec: apiSpec,
@@ -753,7 +931,7 @@ export class ServiceProvider {
         await this.response(respArgs);
       }
     }
-  }
+  };
 
   private _handleApiResponse = ({
     peer,
@@ -761,7 +939,7 @@ export class ServiceProvider {
   }: {
     peer: NetworkPeer;
     data: string | Buffer;
-  }) => {
+  }): void => {
     if (!peer || !data || data.length < MAX_HEADER_LEN) {
       this.logger.debug(`Incomplete message received.`);
       return;
@@ -788,10 +966,10 @@ export class ServiceProvider {
     this.polReqs.delete(msgId);
     if (request?.promise) {
       if (success) {
-        this.logger.silly(`${FOLLOW_UP}Success on <${msgId}>.`);
+        this.logger.debug(`${FOLLOW_UP}Success on <${msgId}>.`);
         request.promise.resolve.call(this, { response: message, request });
       } else {
-        this.logger.silly(`${FOLLOW_UP}Failed on <${msgId}>.`);
+        this.logger.debug(`${FOLLOW_UP}Failed on <${msgId}>.`);
         request.promise.reject.call(this, { err: message, request });
       }
     }
@@ -803,7 +981,7 @@ export class ServiceProvider {
   }: {
     peer: NetworkPeer;
     data: string | Buffer;
-  }) => {
+  }): void => {
     if (!peer || !data) {
       this.logger.debug(`Incomplete message received.`);
       return;
@@ -833,9 +1011,9 @@ export class ServiceProvider {
     }
   };
 
-  private _handleMgrResponse(peer: NetworkPeer, data: Buffer): void {
+  private _handleMgrResponse = (peer: NetworkPeer, data: Buffer): void => {
     const smTask = this.tasks.get(this._TASK_MANAGER);
-    if (!smTask || !(smTask instanceof TcpClient)) return;
+    if (!(smTask instanceof TcpClient)) return;
 
     let raw = "";
     try {
@@ -845,7 +1023,7 @@ export class ServiceProvider {
     } catch (err) {
       this.logger.warn(`Received data is not a valid JSON :\n${raw}`);
     }
-  }
+  };
 
   private _handleTcpApiRequest = async ({
     peer,
@@ -853,7 +1031,7 @@ export class ServiceProvider {
   }: {
     peer: NetworkPeer;
     data: string | Buffer;
-  }) => {
+  }): Promise<void> => {
     if (!peer || !data) {
       this.logger.debug(`Incomplete message received.`);
       return;
@@ -915,10 +1093,10 @@ export class ServiceProvider {
 
     await this._discoverServiceManager();
 
-    this.logger.silly(`Initializing resources in subclass ...`);
+    this.logger.debug(`Initializing resources in subclass ...`);
     this.initializeApiFunctionMap();
     await this.initializingResources();
-    this.logger.silly(`${FOLLOW_UP}Subclass resources initialized.`);
+    this.logger.debug(`${FOLLOW_UP}Subclass resources initialized.`);
 
     this._initialized = true;
     this.logger.debug(`${this.getIdentity()} initialized.`);
@@ -976,9 +1154,9 @@ export class ServiceProvider {
   private async _releaseResources(): Promise<void> {
     this.logger.debug(`Cleanup ${this.getIdentity()} ...`);
 
-    this.logger.silly(`Releasing resources allocated in subclass ...`);
+    this.logger.debug(`Releasing resources allocated in subclass ...`);
     await this.releasingResources(); // Release resources on subclass.
-    this.logger.silly(`${FOLLOW_UP}Subclass resources released.`);
+    this.logger.debug(`${FOLLOW_UP}Subclass resources released.`);
 
     const release: Promise<void>[] = [];
     release.push(this._releaseResponseChannels()); // Close and release response channels.
@@ -1000,7 +1178,7 @@ export class ServiceProvider {
         channel.off(NetworkEvent.Data, this._handleChannelResponse);
         await channel.stop();
         delete this.chnResp[service][instId];
-        this.logger.silly(
+        this.logger.debug(
           `${FOLLOW_UP}<${service}-${instId}> response channel released.`,
         );
       }
@@ -1035,12 +1213,46 @@ export class ServiceProvider {
     }
   }
 
-  private async _stopManagerTask(taskName: string): Promise<void> {
-    const smTask = this.tasks.get(taskName);
-    if (!smTask || !(smTask instanceof TcpClient)) return;
+  /**
+   * Starts the automatic report scheduling.
+   * Reports are sent at configurable intervals after successful registration.
+   */
+  private async _startReportSchedule(): Promise<void> {
+    const reportConfig = this.configManager.getCoreConfig().report;
+    if (!reportConfig?.enabled) {
+      this.logger.info("Automatic reporting is disabled.");
+      return;
+    }
 
-    smTask.off(NetworkEvent.Data, this._handleMgrResponse);
-    await this._stopTask(taskName);
+    const interval = reportConfig?.interval ?? 60 * SECOND;
+    this.logger.info(
+      `Starting automatic reporting every ${interval / SECOND} second(s) ...`,
+    );
+
+    // Schedule periodic reports
+    this._reportTimer = setInterval(async () => {
+      await this.report();
+    }, interval);
+
+    this.logger.debug(`${FOLLOW_UP}Automatic reporting started.`);
+  }
+
+  /**
+   * Stops the automatic report scheduling.
+   */
+  private async _stopReportSchedule(): Promise<void> {
+    if (this._reportTimer) {
+      clearInterval(this._reportTimer);
+      this._reportTimer = null;
+      this.logger.debug(`${FOLLOW_UP}Automatic reporting stopped.`);
+    }
+  }
+
+  private async _stopManagerTask(): Promise<void> {
+    if (this.tasks.has(this._TASK_MANAGER)) {
+      await this.setManagerChannel(false);
+      await this._stopTask(this._TASK_MANAGER);
+    }
   }
 
   private async _stopTask(taskName: string): Promise<void> {
@@ -1050,7 +1262,9 @@ export class ServiceProvider {
     const promise: Promise<void> = task
       .stop()
       .then(() => {
-        this.logger.info(`Task <${taskName}> stopped successfully.`);
+        this.logger.debug(
+          `${FOLLOW_UP}<${taskName}> task stopped successfully.`,
+        );
         this.tasks.delete(taskName);
       })
       .catch((error: Error) => {
@@ -1061,35 +1275,6 @@ export class ServiceProvider {
         );
       });
     return promise;
-  }
-
-  private async _testRegistered(
-    smTask: TcpClient,
-    msgId: string,
-  ): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        smTask.off(this._EVENT_MGR_RESPONSE, smResponse);
-        reject(
-          new Error(
-            "Timeout for waiting ServiceManager registration acknowledgment",
-          ),
-        );
-      }, 5 * SECOND);
-
-      const smResponse = (json: any): void => {
-        if (
-          json.attributes["network.operation"] === "register.ack" &&
-          json.attributes["correlation.id"] === msgId
-        ) {
-          clearTimeout(timer);
-          smTask.off(this._EVENT_MGR_RESPONSE, smResponse);
-          resolve();
-        }
-      };
-
-      smTask.on(this._EVENT_MGR_RESPONSE, smResponse);
-    });
   }
 
   private _updateProviderInfo() {

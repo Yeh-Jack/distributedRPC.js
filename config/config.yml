@@ -23,13 +23,18 @@ app:
 #     udp:
 #       address: 0.0.0.0
 #       port: 5707
+#   report:
+#     enabled: true
+#     interval: 60000
+#     max_retries: 3
+#     retry_delay: 5000
 #   retry:
 #     backoff:
-#       enable: false
+#       enabled: false
 #       max_delay: 240000
 #       multiplier: 2
 #     interval: 2000
-#     max_try: 0
+#     max_retries: 0
 
 log:
   log_level: silly

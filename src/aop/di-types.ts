@@ -5,9 +5,12 @@
 export const TYPES = {
   BroadcastUdpServer: Symbol.for("BroadcastUdpServer"),
   ConfigManager: Symbol.for("ConfigManager"),
+  DiscoverProcedure: Symbol.for("DiscoverProcedure"),
   IdGenerator: Symbol.for("IdGenerator"),
   Logger: Symbol.for("Logger"),
   None: Symbol.for("None"),
+  RegisterProcedure: Symbol.for("RegisterProcedure"),
+  ReportProcedure: Symbol.for("ReportProcedure"),
   ServiceManager: Symbol.for("ServiceManager"),
   ServiceProvider: Symbol.for("ServiceProvider"),
   TcpServer: Symbol.for("TcpServer"),

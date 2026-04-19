@@ -41,6 +41,9 @@ importers:
       js-yaml:
         specifier: ^4.1.1
         version: 4.1.1
+      lodash:
+        specifier: ^4.18.1
+        version: 4.18.1
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2
@@ -54,6 +57,9 @@ importers:
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
+      '@types/lodash':
+        specifier: ^4.17.24
+        version: 4.17.24
       '@types/node':
         specifier: ^25.0.3
         version: 25.0.3
@@ -619,6 +625,9 @@ packages:
   '@types/js-yaml@4.0.9':
     resolution: {integrity: sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg==}
 
+  '@types/lodash@4.17.24':
+    resolution: {integrity: sha512-gIW7lQLZbue7lRSWEFql49QJJWThrTFFeIMJdp3eH4tKoxm1OvEPg02rm4wCCSHS0cL3/Fizimb35b7k8atwsQ==}
+
   '@types/node@25.0.3':
     resolution: {integrity: sha512-W609buLVRVmeW693xKfzHeIV6nJGGz98uCPfeXI1ELMLXVeKYZ9m15fAMSaUPBHYLGFsVRcMmSCksQOrZV9BYA==}
 
@@ -842,6 +851,9 @@ packages:
 
   lodash.camelcase@4.3.0:
     resolution: {integrity: sha512-TwuEnCnxbc3rAvhf/LbG7tJUDzhqXyFnv3dtzLOPgCG/hODL7WFnsbwktkD7yUV0RrreP/l1PALq/YSg6VvjlA==}
+
+  lodash@4.18.1:
+    resolution: {integrity: sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==}
 
   logform@2.7.0:
     resolution: {integrity: sha512-TFYA4jnP7PVbmlBIfhlSe+WKxs9dklXMTEGcBCIvLhE/Tn3H6Gk1norupVW7m5Cnd4bLcr08AytbyV/xj7f/kQ==}
@@ -1588,6 +1600,8 @@ snapshots:
 
   '@types/js-yaml@4.0.9': {}
 
+  '@types/lodash@4.17.24': {}
+
   '@types/node@25.0.3':
     dependencies:
       undici-types: 7.16.0
@@ -1827,6 +1841,8 @@ snapshots:
       uc.micro: 2.1.0
 
   lodash.camelcase@4.3.0: {}
+
+  lodash@4.18.1: {}
 
   logform@2.7.0:
     dependencies:

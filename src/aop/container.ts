@@ -20,6 +20,11 @@ import { TcpServer } from "../network/tcp-server";
 import { UdpDiscovery } from "../network/udp-discovery";
 import { UdpServer } from "../network/udp-server";
 import { AppEnv, IdGenerator } from "../types/basal-protocol";
+import {
+  DiscoverProcedure,
+  RegisterProcedure,
+  ReportProcedure,
+} from "../procedure";
 
 export { TYPES };
 
@@ -124,3 +129,19 @@ export function createServiceManagerDiscover(
 
   return undefined;
 }
+
+// Bind procedure classes as singletons
+container
+  .bind<DiscoverProcedure>(TYPES.DiscoverProcedure)
+  .to(DiscoverProcedure)
+  .inSingletonScope();
+
+container
+  .bind<RegisterProcedure>(TYPES.RegisterProcedure)
+  .to(RegisterProcedure)
+  .inSingletonScope();
+
+container
+  .bind<ReportProcedure>(TYPES.ReportProcedure)
+  .to(ReportProcedure)
+  .inSingletonScope();

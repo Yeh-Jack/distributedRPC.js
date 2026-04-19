@@ -296,16 +296,16 @@ export class UdpDiscovery extends UdpClient {
 
           // Validate that it looks like a valid BroadcastResponse
           if (!response.manager || !response.manager.provider) {
-            this.logger.warn(`Received invalid response from ${peerInfo}`);
-            reject(new Error("Incomplete UDP response message."));
+            this.logger.warn(`Received invalid discovery response from ${peerInfo}`);
+            reject(new Error("Incomplete UDP discovery response message."));
           }
 
           const provider = response.manager.provider;
           this.logger.debug(
-            `Response from <${provider.name}-${provider.id}> at ${peerInfo} received.`,
+            `Discovery response from <${provider.name}-${provider.id}> at ${peerInfo} received.`,
           );
           this.logger.silly(
-            `Response data :\n${JSON.stringify(response, undefined, 2)}`,
+            `Discovery response data :\n${JSON.stringify(response, undefined, 2)}`,
           );
 
           responses.push(response);
@@ -316,7 +316,7 @@ export class UdpDiscovery extends UdpClient {
           }
         } catch (err) {
           this.logger.warn(
-            `Failed to parse response from ${peerInfo}: ${(err as Error).message}`,
+            `Failed to parse discovery response from ${peerInfo}: ${(err as Error).message}`,
           );
           reject(new Error("Invalide UDP response message."));
         }

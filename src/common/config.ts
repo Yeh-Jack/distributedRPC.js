@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import yaml from "js-yaml";
+import _ from "lodash";
 import { LogFormat, LoggerManager } from "./logger";
 import {
   AppEnv,
@@ -389,11 +390,7 @@ export class ConfigManager<
     parsed: Partial<ProviderConfig<T_App, T_Core>>,
   ): ProviderConfig<T_App, T_Core> {
     const defaults = this._getDefaultConfig();
-    return {
-      // Shallow merge for app, deep merge for core and log.
-      app: { ...defaults.app, ...parsed.app },
-      core: { ...defaults.core, ...parsed.core },
-      log: { ...defaults.log, ...parsed.log },
-    };
+    const merged = _.merge(defaults, parsed);
+    return merged;
   }
 }

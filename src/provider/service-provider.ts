@@ -1,4 +1,3 @@
-import * as os from "os";
 import { inject, injectable } from "inversify";
 import { DetectedResourceAttributes } from "@opentelemetry/resources";
 import {
@@ -6,6 +5,25 @@ import {
   ATTR_SERVICE_VERSION,
 } from "@opentelemetry/semantic-conventions";
 
+import { createNamedTcpServer, TYPES } from "../aop/container";
+import { ConfigManager } from "../common/config";
+import { LoggerManager } from "../common/logger";
+import { BroadcastResponse260321 } from "../manager/api-spec-260321";
+import { OtelMeterics, OtelProviderState } from "../metrics/otel-metrics";
+import { OtelTracer } from "../metrics/otel-tracing";
+import {
+  NetworkEvent,
+  NetworkPeer,
+  getHostIP,
+} from "../network/network-events";
+import { TcpClient } from "../network/tcp-client";
+import { TcpServer } from "../network/tcp-server";
+import {
+  ProcedureContext,
+  RegisterContext,
+  ReportContext,
+  ManagerInfo,
+} from "../procedure";
 import {
   AccessPoint,
   AckType,
@@ -20,8 +38,6 @@ import {
   NetworkProtocol,
   PeerIdentity,
   ProviderConnectInfo,
-  RegisterInfo,
-  ReportData,
   ResponseArgs,
   SocketAddress,
   getAppEnv,
@@ -31,23 +47,6 @@ import {
   SECOND,
   UNKNOWN_ATTRIBUTE,
 } from "../types/basal-protocol";
-import { BroadcastResponse260321 } from "../manager/api-spec-260321";
-import { TcpClient } from "../network/tcp-client";
-import {
-  createNamedTcpServer,
-  createServiceManagerDiscover,
-  TYPES,
-} from "../aop/container";
-import { ConfigManager } from "../common/config";
-import { LoggerManager } from "../common/logger";
-import { OtelMeterics, OtelProviderState } from "../metrics/otel-metrics";
-import { OtelTracer } from "../metrics/otel-tracing";
-import {
-  NetworkEvent,
-  NetworkPeer,
-  getHostIP,
-} from "../network/network-events";
-import { TcpServer } from "../network/tcp-server";
 import {
   ProviderState,
   ProviderInfo,
@@ -58,7 +57,6 @@ import {
 
 @injectable()
 export class ServiceProvider {
-  private readonly _EVENT_MGR_RESPONSE = "mgr_response";
   protected readonly _TASK_CHANNEL_API: string = "_chnAPI";
   protected readonly _TASK_CHANNEL_RESPONSE: string = "_chnResponse";
   protected readonly _TASK_MANAGER: string = "_svcManager";
@@ -77,13 +75,13 @@ export class ServiceProvider {
   protected metrics!: OtelMeterics;
   protected tracer!: OtelTracer;
 
+  private _apiCounter: Map<string, Omit<ApiCounter, "total">> = new Map();
   private _initialized: boolean = false;
   private _manager: any = {}; // Keep effective ServiceManager information.
   private _managerInfo: BroadcastResponse260321[] = [];
   private _providerState!: ProviderState;
-  private _registering: boolean = false;
   private _reportTimer: NodeJS.Timeout | null = null;
-  private _apiCounter: Map<string, Omit<ApiCounter, "total">> = new Map();
+  private _procedure: any = {};
 
   /**
    * Creates a ServiceProvider instance.
@@ -407,50 +405,40 @@ export class ServiceProvider {
   }
 
   public async register(): Promise<void> {
-    const smTask = this.tasks.get(this._TASK_MANAGER);
-    if (this._registering || !(smTask instanceof TcpClient)) return;
+    // Prevent multiple register procedures run.
+    if (this._procedure.register) return;
+    this._procedure.register = true; // Booking this procedure in minimal time.
 
-    this.logger.info(`Registering this provider to the service manager ...`);
-    this._registering = true;
-    const ackType = this._manager.manager.apis.register.ack;
-    const ap: AccessPoint = this.getTcpTaskInfo(this._TASK_CHANNEL_RESPONSE);
-    const regInfo: RegisterInfo = {
-      ...this.PROTOCOL,
-      provider: {
-        ...this.PROTOCOL.provider,
-        ...ap,
-      },
+    // Lazy initialization of the procedure.
+    const { RegisterProcedure } = await import("../procedure");
+    const procedure = new RegisterProcedure(this.configManager);
+    this._procedure.register = procedure;
+
+    // Context for execute the procedure.
+    const context: RegisterContext = {
+      // parent: this,
+      taskName: this._TASK_CHANNEL_RESPONSE,
+      tasks: this.tasks,
+      idGenerator: this.idGenerator,
+
+      manager: this._manager,
+      protocol: this.PROTOCOL,
+      smTaskName: this._TASK_MANAGER,
+
+      ask: this.ask.bind(this),
+      buildMessage: this.buildMessage.bind(this),
+      getTcpTaskInfo: this.getTcpTaskInfo.bind(this),
     };
-    const apiData: ApiCall = this.buildMessage("register", regInfo);
 
-    this.logger.silly(
-      `Register information :\n${JSON.stringify(apiData, undefined, 2)}`,
-    );
-    const { msgId, promise } = await this.ask(smTask, apiData, ackType);
-    if (promise)
-      promise
-        .then(
-          async ({
-            response,
-            request,
-          }: {
-            response: Buffer;
-            request: ApiCall;
-          }) => {
-            const ack: string = response ? response.toString() : "";
-            this.logger.info(
-              `${FOLLOW_UP}Register to the service manager: <${ack}>.`,
-            );
-          },
-        )
-        .catch(({ err, request }: { err: Buffer; request: ApiCall }) => {
-          this.logger.warn(
-            `${FOLLOW_UP}Error on <register:${msgId}>: ${err.toString()}`,
-          );
-        })
-        .finally(() => {
-          this._registering = false;
-        });
+    // Repeat executing the procedure until it success.
+    let success: boolean = false;
+    while (!success) {
+      success = await procedure.execute(context);
+      if (success) {
+        delete this._procedure.register;
+        break;
+      }
+    }
   }
 
   /**
@@ -474,40 +462,29 @@ export class ServiceProvider {
    * @returns Promise that resolves when report is sent
    */
   public async report(): Promise<void> {
-    const smTask = this.tasks.get(this._TASK_MANAGER);
-    if (!(smTask instanceof TcpClient)) return;
-    this.logger.debug("Report current status to service mamanger ...");
-
-    const ackType = this._manager.manager.apis.report.ack;
-    const reportData = this._collectReportData();
-    const apiData: ApiCall = this.buildMessage("report", reportData);
-    const reportConfig = this.configManager.getCoreConfig().report;
-    const maxRetries = reportConfig?.max_retries ?? 3;
-    const retryDelay = reportConfig?.retry_delay ?? 5 * SECOND;
-
-    let attempt = 0;
-    let success = false;
-
-    while (attempt <= maxRetries && !success) {
-      try {
-        const { promise } = await this.ask(smTask, apiData, ackType);
-        if (promise) await promise;
-        this.logger.silly(`${FOLLOW_UP}Report sent successfully.`);
-        success = true;
-      } catch (err) {
-        attempt++;
-        if (attempt > maxRetries) {
-          this.logger.warn(
-            `${FOLLOW_UP}Failed to send report after ${maxRetries} retries.`,
-          );
-          break;
-        }
-        this.logger.debug(
-          `${FOLLOW_UP}Report attempt ${attempt} failed, retrying in ${retryDelay / SECOND} seconds ...`,
-        );
-        await this.delay(retryDelay);
-      }
+    let procedure = this._procedure.report;
+    if (!procedure) {
+      // Lazy initialization if procedure wasn't injected
+      const { ReportProcedure } = await import("../procedure");
+      procedure = new ReportProcedure(this.configManager);
+      this._procedure.report = procedure; // Keep this procedure.
     }
+
+    // Context for execute the procedure.
+    const context: ReportContext = {
+      parent: this,
+      taskName: this._TASK_MANAGER,
+      tasks: this.tasks,
+      idGenerator: this.idGenerator,
+
+      manager: this._manager,
+      apiCounter: this._apiCounter,
+
+      ask: this.ask.bind(this),
+      buildMessage: this.buildMessage.bind(this),
+    };
+
+    await procedure.execute(context);
   }
 
   protected async response(respArgs: ResponseArgs): Promise<void> {
@@ -572,20 +549,6 @@ export class ServiceProvider {
     return task;
   }
 
-  // ServiceManager channel (for register and report) is a TcpClient.
-  protected async setManagerChannel(
-    subscribe: boolean,
-    ap?: AccessPoint,
-  ): Promise<TcpClient> {
-    const task: TcpClient = await this.initializeTcpClient(
-      this._TASK_MANAGER,
-      ap,
-    );
-    if (subscribe) task.on(NetworkEvent.Data, this._handleMgrResponse);
-    else task.off(NetworkEvent.Data, this._handleMgrResponse);
-    return task;
-  }
-
   // API response channel (for response to request) is a TcpServer.
   protected async setResponseChannel(subscribe: boolean): Promise<TcpServer> {
     const task: TcpServer = await this.initializeTcpServer(
@@ -640,7 +603,7 @@ export class ServiceProvider {
     if (!this._initialized) {
       await this._initializeResources();
     }
-
+    await this._discoverServiceManager();
     this.setState(ExecutionState.Starting);
 
     this.logger.debug(`Starting the service in subclass ...`);
@@ -742,80 +705,36 @@ export class ServiceProvider {
   // Private Methods
   // --------------------------------------------
 
-  /**
-   * Collects system metrics for the report.
-   * Sums up network transmission/received bytes from all TcpServer and TcpClient tasks.
-   *
-   * @returns ReportData containing current system metrics
-   */
-  protected _collectReportData(): ReportData {
-    const MB = 1024 * 1024;
-    const memUsage = process.memoryUsage();
-    const ramUsed = Math.round(memUsage.heapUsed / MB); // Convert to MB
+  private async _discoverServiceManager(): Promise<void> {
+    // Prevent multiple discovery procedures run.
+    if (this._procedure.discovery) return;
+    this._procedure.discovery = true; // Booking this procedure in minimal time.
 
-    const freeMem = os.freemem();
-    const ramFree = Math.round(freeMem / MB); // Convert to MB
+    // Lazy initialization of the procedure.
+    const { DiscoverProcedure } = await import("../procedure");
+    const procedure = new DiscoverProcedure(this.configManager);
+    this._procedure.discovery = procedure;
 
-    // Calculate CPU load using 1-minute average
-    const cpuLoad = Math.round((os.loadavg()[0] * 100) / os.cpus().length);
+    // Context for execute the procedure.
+    const context: ProcedureContext = {
+      // parent: this,
+      taskName: this._TASK_MANAGER,
+      tasks: this.tasks,
+      idGenerator: this.idGenerator,
+    };
 
-    // Sum up network bytes from all TcpServer and TcpClient tasks
-    let totalTxBytes = 0;
-    let totalRxBytes = 0;
-
-    for (const [name, task] of this.tasks.entries()) {
-      if (task instanceof TcpServer || task instanceof TcpClient) {
-        totalTxBytes += task.getTxBytes();
-        totalRxBytes += task.getRxBytes();
+    // Repeat executing the procedure until it success.
+    let result: ManagerInfo | undefined = undefined;
+    while (!result) {
+      result = await procedure.execute(context);
+      if (result?.managerInfo) {
+        this._managerInfo = result.managerInfo;
+        this._manager = result.manager;
+        this.tasks.set(this._TASK_MANAGER, result.instance);
+        delete this._procedure.discovery;
+        break;
       }
     }
-
-    // Auto-scale network transmission / received
-    const networkRx = this._formatBytes(totalRxBytes);
-    const networkTx = this._formatBytes(totalTxBytes);
-
-    return {
-      timestamp: Date.now(),
-      state: this.getState(),
-      ramUsed,
-      ramFree,
-      cpuLoad,
-      netRx: networkRx,
-      netRxBytes: totalRxBytes,
-      netTx: networkTx,
-      netTxBytes: totalTxBytes,
-      apiCounter: this._apiCounter,
-    };
-  }
-
-  private async _connectManager(): Promise<void> {
-    if (this._managerInfo?.length < 1) return;
-
-    this._manager = { ...this._managerInfo[0] }; // Store received serive manager information.
-    const ap: AccessPoint = this._manager.manager.provider;
-    this.logger.silly(
-      `ServiceManager info :\n${JSON.stringify(ap, undefined, 2)}`,
-    );
-    this._manager.instance = await this.setManagerChannel(true, ap);
-  }
-
-  /**
-   * Formats bytes to human-readable string with auto-scaled unit.
-   *
-   * @param bytes - Number of bytes
-   * @returns Formatted string with unit (B, KB, MB, GB)
-   */
-  private _formatBytes(bytes: number): string {
-    const units = ["B", "KB", "MB", "GB"];
-    let unitIndex = 0;
-    let size = bytes;
-
-    while (size >= 1024 && unitIndex < units.length - 1) {
-      size /= 1024;
-      unitIndex++;
-    }
-
-    return `${size.toFixed(2)} ${units[unitIndex]}`;
   }
 
   private _getSocketAddr(
@@ -897,29 +816,7 @@ export class ServiceProvider {
         }
       }
     } finally {
-      // Update API counter statistics
-      if (json?.api) {
-        const apiPath = json.api;
-        let counter = this._apiCounter.get(apiPath);
-        if (!counter) {
-          counter = {
-            success: 0,
-            invalidRequest: 0,
-            failedOnProcess: 0,
-          };
-          this._apiCounter.set(apiPath, counter);
-        }
-
-        // Increment appropriate counter based on error type
-        if (errType === AckValue.InvalidReqData) {
-          counter.invalidRequest++;
-        } else if (errType === AckValue.Error) {
-          counter.failedOnProcess++;
-        } else if (errType === AckValue.None) {
-          counter.success++;
-        }
-      }
-
+      this._updateApiCouynter(errType, json);
       if (result.length > 1) {
         const respArgs: ResponseArgs = {
           apiSpec: apiSpec,
@@ -1011,20 +908,6 @@ export class ServiceProvider {
     }
   };
 
-  private _handleMgrResponse = (peer: NetworkPeer, data: Buffer): void => {
-    const smTask = this.tasks.get(this._TASK_MANAGER);
-    if (!(smTask instanceof TcpClient)) return;
-
-    let raw = "";
-    try {
-      raw = data.toString();
-      const json = JSON.parse(raw);
-      smTask.emit(this._EVENT_MGR_RESPONSE, json);
-    } catch (err) {
-      this.logger.warn(`Received data is not a valid JSON :\n${raw}`);
-    }
-  };
-
   private _handleTcpApiRequest = async ({
     peer,
     data,
@@ -1038,26 +921,6 @@ export class ServiceProvider {
     }
     await this._handleApiRequest(data);
   };
-
-  private async _discoverServiceManager(): Promise<void> {
-    const discoveryConfig =
-      this.configManager.getCoreConfig().net?.sm_discovery;
-    const discoveryName: string =
-      discoveryConfig.description || UNKNOWN_ATTRIBUTE;
-    const discovery = createServiceManagerDiscover(
-      this.configManager,
-      discoveryName,
-      discoveryConfig,
-    );
-    if (!discovery) {
-      this._managerInfo = [];
-      return;
-    }
-
-    this.tasks.set(discoveryName, discovery);
-    this._managerInfo = (await discovery.discover()).responses;
-    await this._connectManager();
-  }
 
   private async _initializeOtel(): Promise<void> {
     // Use OtelProviderState instead of the default ProviderState.
@@ -1090,8 +953,6 @@ export class ServiceProvider {
     jobs.push(this.initializeTcpServer(this._TASK_CHANNEL_RESPONSE));
     const result = await Promise.all(jobs);
     if (result.length > 1) this.setResponseChannel(true);
-
-    await this._discoverServiceManager();
 
     this.logger.debug(`Initializing resources in subclass ...`);
     this.initializeApiFunctionMap();
@@ -1218,23 +1079,27 @@ export class ServiceProvider {
    * Reports are sent at configurable intervals after successful registration.
    */
   private async _startReportSchedule(): Promise<void> {
+    // Check preconditions
     const reportConfig = this.configManager.getCoreConfig().report;
     if (!reportConfig?.enabled) {
       this.logger.info("Automatic reporting is disabled.");
       return;
     }
-
-    const interval = reportConfig?.interval ?? 60 * SECOND;
-    this.logger.info(
-      `Starting automatic reporting every ${interval / SECOND} second(s) ...`,
-    );
+    const smTask = this.tasks.get(this._TASK_MANAGER);
+    if (!(smTask instanceof TcpClient)) {
+      this.logger.info("No ServiceManager found for report.");
+      return;
+    }
 
     // Schedule periodic reports
+    const interval = reportConfig?.interval ?? 60 * SECOND;
     this._reportTimer = setInterval(async () => {
       await this.report();
     }, interval);
 
-    this.logger.debug(`${FOLLOW_UP}Automatic reporting started.`);
+    this.logger.info(
+      `Automatic reporting started for reporting every ${interval / SECOND} second(s) ...`,
+    );
   }
 
   /**
@@ -1250,7 +1115,6 @@ export class ServiceProvider {
 
   private async _stopManagerTask(): Promise<void> {
     if (this.tasks.has(this._TASK_MANAGER)) {
-      await this.setManagerChannel(false);
       await this._stopTask(this._TASK_MANAGER);
     }
   }
@@ -1275,6 +1139,31 @@ export class ServiceProvider {
         );
       });
     return promise;
+  }
+
+  private _updateApiCouynter(errType: AckValue, json: ApiCall) {
+    // Update API counter statistics
+    if (json?.api) {
+      const apiPath = json.api;
+      let counter = this._apiCounter.get(apiPath);
+      if (!counter) {
+        counter = {
+          success: 0,
+          invalidRequest: 0,
+          failedOnProcess: 0,
+        };
+        this._apiCounter.set(apiPath, counter);
+      }
+
+      // Increment appropriate counter based on error type
+      if (errType === AckValue.InvalidReqData) {
+        counter.invalidRequest++;
+      } else if (errType === AckValue.Error) {
+        counter.failedOnProcess++;
+      } else if (errType === AckValue.None) {
+        counter.success++;
+      }
+    }
   }
 
   private _updateProviderInfo() {

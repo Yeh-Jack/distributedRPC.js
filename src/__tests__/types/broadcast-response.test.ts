@@ -3,8 +3,8 @@ import {
   AccessPoint,
   BroadcastResponse,
   BasalProtocol,
+  NetworkProtocol,
 } from "../../types/basal-protocol";
-import { NetworkProtocol } from "../../network/network-events";
 
 describe("BroadcastResponse", () => {
   describe("structure validation", () => {

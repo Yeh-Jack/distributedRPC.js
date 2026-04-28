@@ -78,11 +78,58 @@ export function instrumentService<T extends object>(
   instance: T,
   metrics: ExecutionMetrics,
 ): T {
-  // The method decorators (@traceMethod) will handle the instrumentation
   const logger: Logger = metrics.getLogger();
   logger.info(
     "Service instrumented for DI compatibility. Use @traceMethod decorators for tracing.",
   );
 
   return instance;
+}
+
+export function withExecutionTime<T extends object>(
+  instance: T,
+  metrics: ExecutionMetrics,
+): T {
+  const handler: ProxyHandler<T> = {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+
+      if (typeof value === "function" && prop !== "constructor") {
+        return function (...args: any[]) {
+          const startTime = performance.now();
+          const className = instance.constructor.name;
+
+          if (isAsyncFunction(value)) {
+            const result = value.apply(target, args);
+            return result
+              .then((resolved: any) => {
+                metrics.recordExecutionTime(
+                  className,
+                  String(prop),
+                  performance.now() - startTime,
+                  true,
+                );
+                return resolved;
+              })
+              .catch((error: any) => {
+                metrics.recordExecutionTime(
+                  className,
+                  String(prop),
+                  performance.now() - startTime,
+                  false,
+                );
+                throw error;
+              });
+          } else {
+            const result = value.apply(target, args);
+            return result;
+          }
+        };
+      }
+
+      return value;
+    },
+  };
+
+  return new Proxy(instance, handler);
 }

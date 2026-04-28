@@ -4,9 +4,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    reporters: ["default", "verbose"],
+    reporters: ["default"],
     setupFiles: ["./src/__tests__/setup.ts"],
-    // ui : true,  // Optional, enables the Vitest UI by default.
+    // ui : true, // Optional, enables the Vitest UI by default.
+    pool: "forks",
     api: {
       port: 9999, // Change Vitest UI port to 9999.
       host: "0.0.0.0", // Public accessable.

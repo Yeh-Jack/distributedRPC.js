@@ -25,14 +25,14 @@ export interface ProviderInfo {
   [ATTR_DEPLOY_ENV]: string;
 }
 
-export const DEFAULT_RESOURCE: Required<ProviderInfo> = {
+export const DEFAULT_RESOURCE: Required<ProviderInfo> = Object.freeze({
   enabled: false,
   [ATTR_SERVICE_NAME]: UNKNOWN_ATTRIBUTE,
   [ATTR_SERVICE_INSTANCE]: UNKNOWN_ATTRIBUTE,
   [ATTR_SERVICE_VERSION]: UNKNOWN_ATTRIBUTE,
   [ATTR_PROTOCOL_VERSION]: UNKNOWN_ATTRIBUTE,
   [ATTR_DEPLOY_ENV]: UNKNOWN_ATTRIBUTE,
-};
+});
 /**
  * Centralized server state tracking for OpenTelemetry span attributes.
  *

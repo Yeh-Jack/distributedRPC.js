@@ -71,6 +71,7 @@ describe("ServiceManager", () => {
   let mockLogger: ReturnType<typeof createMockLogger>;
   let mockConfigManager: ConfigManager;
   let mockLoggerManager: LoggerManager;
+  let mockNetConfig: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -78,14 +79,17 @@ describe("ServiceManager", () => {
     mockIdGenerator = createMockIdGenerator();
     mockLogger = createMockLogger();
 
+    mockNetConfig = {
+      tcp_address: "127.0.0.1",
+      tcp_port: 0,
+      udp_address: "127.0.0.1",
+      udp_port: DEFAULT_DISCOVERY_PORT,
+      sm_discovery: Symbol.for("UdpDiscovery"),
+    };
+
     mockConfigManager = {
       getCoreConfig: () => ({
-        net: {
-          tcp_address: "127.0.0.1",
-          tcp_port: 0,
-          udp_address: "127.0.0.1",
-          udp_port: DEFAULT_DISCOVERY_PORT,
-        },
+        net: mockNetConfig,
         retry: {
           interval: 10,
           max_try: 2,
@@ -468,6 +472,74 @@ describe("ServiceManager", () => {
     it("should complete full stop lifecycle", async () => {
       await serviceManager.stop();
       expect(serviceManager.getState()).toBeDefined();
+    });
+  });
+
+  describe("registrar", () => {
+    it("should register a provider and log", async () => {
+      const data = {
+        peer: { service: "TestService", instance: "inst-1" },
+        api: "register",
+        args: {
+          provider: { name: "TestService", id: "inst-1" },
+        },
+        msgId: "msg-1",
+      };
+
+      await serviceManager.registrar(data);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.stringContaining("registered"),
+      );
+    });
+  });
+
+  describe("buildAccessPointInfo", () => {
+    it("should add api routes to baseInfo", () => {
+      const baseInfo = { address: "127.0.0.1", port: 8080 };
+      const result = serviceManager.buildAccessPointInfo(baseInfo as any);
+      expect(result.api).toContain("register");
+      expect(result.api).toContain("report");
+    });
+  });
+
+  describe("reloading", () => {
+    it("should disable service manager discovery", async () => {
+      await serviceManager.reloading();
+      expect(mockNetConfig.sm_discovery).toBe(Symbol.for("None"));
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        expect.stringContaining("disabled"),
+      );
+    });
+  });
+
+  describe("starting", () => {
+    it("should call setApiChannel and _initializeBroadcastListener", async () => {
+      vi.spyOn(serviceManager as any, "setApiChannel").mockResolvedValue({
+        start: vi.fn(),
+      } as any);
+      vi.spyOn(
+        serviceManager as any,
+        "_initializeBroadcastListener",
+      ).mockResolvedValue(undefined);
+
+      await serviceManager.starting();
+
+      expect(serviceManager["setApiChannel"]).toHaveBeenCalledWith(true);
+      expect(
+        serviceManager["_initializeBroadcastListener"],
+      ).toHaveBeenCalledWith("reception");
+    });
+  });
+
+  describe("stopping", () => {
+    it("should call setApiChannel with false", async () => {
+      vi.spyOn(serviceManager as any, "setApiChannel").mockResolvedValue({
+        stop: vi.fn(),
+      } as any);
+
+      await serviceManager.stopping();
+
+      expect(serviceManager["setApiChannel"]).toHaveBeenCalledWith(false);
     });
   });
 });

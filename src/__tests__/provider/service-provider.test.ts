@@ -849,6 +849,27 @@ describe("ServiceProvider", () => {
       expect(mockChannel.off).toHaveBeenCalled();
       expect(mockChannel.stop).toHaveBeenCalled();
     });
+
+    it("should throw error when some channels cannot be released", async () => {
+      const mockChannel = createMockTcpClient();
+      mockChannel.off = vi.fn();
+      mockChannel.stop = vi.fn().mockResolvedValue(undefined);
+
+      (serviceProvider as any).chnResp = {
+        ServiceA: { "inst-1": mockChannel },
+      };
+
+      vi.spyOn(Object, "entries").mockReturnValueOnce([
+        ["ServiceA", { "inst-1": mockChannel }],
+      ] as any);
+      vi.spyOn(Object, "keys").mockReturnValueOnce(["inst-1"] as any);
+
+      await expect(
+        (serviceProvider as any)._releaseResponseChannels(),
+      ).rejects.toThrow(
+        "Unable to release some resources on the response channel pool.",
+      );
+    });
   });
 
   describe("buildAccessPointInfo", () => {

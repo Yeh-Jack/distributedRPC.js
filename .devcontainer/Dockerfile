@@ -4,19 +4,18 @@ FROM mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm
 # --- Install OS level packages. ---
 ARG USER="node"
 RUN export DEBIAN_FRONTEND=noninteractive && \
-    # --- Add Java 21 repository which is required for SonarLint extension.
-    apt update && apt-get install -y --no-install-recommends gnupg software-properties-common wget && \
+  # --- Install common security related packages.
+    apt update && apt-get install -y --no-install-recommends ca-certificates gnupg gnome-keyring libsecret-1-0 software-properties-common wget && \
+  # --- Add Java 21 repository which is required for SonarLint extension.
     wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor | tee /usr/share/keyrings/adoptium.gpg > /dev/null && \
     echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb bookworm main" | tee /etc/apt/sources.list.d/adoptium.list && \
+  # --- Install Java 21 JDK and common networking packages.
     apt update && apt upgrade -y && apt-get install -y --no-install-recommends \
         curl git git-lfs htop iftop net-tools netcat-traditional nfs-common nmap rsync traceroute vim \
         dnsutils exfatprogs iputils-ping openssh-server telnet temurin-21-jdk && \
-    # --- Clean up packages and repositories.
+  # --- Clean up packages and repositories.
     apt-get autoclean && apt-get autoremove && rm -rf /var/lib/apt/lists/* && \
-    # --- Install python package manager 'uv'. ---
-    curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    mv /root/.local/bin/uv /usr/local/bin/ && mv /root/.local/bin/uvx /usr/local/bin/ && rm -rf /root/.local && \
-    # --- Install oh-my-bash for root and node user, disable auto update and change theme to 'lambda'. ---
+  # --- Install oh-my-bash for root and node user, disable auto update, and change theme to 'lambda'.
     bash -c "$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)" --unattended && \
     sed -i 's/^# DISABLE_AUTO_UPDATE/DISABLE_AUTO_UPDATE/' ~/.bashrc && \
     sed -i 's/OSH_THEME="font"/OSH_THEME="lambda"/g' ~/.bashrc && rm ~/.bashrc.omb-* && \
@@ -28,7 +27,6 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
 # Define the local deployed LLM server.
 ARG LLM_HOST="llm.enjo.tech"
 ARG LLM_PORT=443
-ARG LLM_CRED="5e9cc49a9126a4b85be7c41aafc62499fa56a873ac4a94eb5e8d532ae3d50a2a"
 # OpenCode paths.
 ARG OPEN_CODE_PATH="/home/${USER}/.config/opencode"
 ARG PLUGIN_PATH="${OPEN_CODE_PATH}/plugins"
@@ -45,31 +43,32 @@ ENV UV_LINK_MODE=copy
 
 # --- Install Node.js, OpenCode and "UI UX Pro Max" skill globally. ---
 RUN \
-    # --- Install the specific version of node.js. ---
+  # --- Install the specific version of node.js. ---
     su node -c ". /usr/local/share/nvm/nvm.sh && nvm install --default ${NODE_VERSION} && nvm use default" && \
-    # --- Install pnpm, OpenCode TUI, and ui-ux-pro-max-skill. ---
-    # Initialize the ui-ux-pro-max-skill by `uipro init --ai opencode` in your project folder.
+  # --- Install pnpm, OpenCode TUI, and ui-ux-pro-max-skill. ---
+  # --- Initialize the ui-ux-pro-max-skill by `uipro init --ai opencode` in your project folder.
     npm install -g pnpm@${PNPM_VERSION} opencode-ai uipro-cli && \
-    # --- Install corepack. ---
+  # --- Install corepack. ---
     corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
 # --- Install skills and make default configurations for the AI assistances. ---
 RUN \
-    # --- Install Anthropic skills. ---
+  # --- Install Anthropic skills. ---
     mkdir -p ${SKILL_PATH} && \
     git clone --depth 1 https://github.com/anthropics/skills.git ${OPEN_CODE_PATH}/anthropic-skills && \
     ln -s ${OPEN_CODE_PATH}/anthropic-skills/skills ${SKILL_PATH}/anthropics && \
-    # --- Install 'Planning with Files' skill ---
+  # --- Install 'Planning with Files' skill ---
     git clone https://github.com/OthmanAdi/planning-with-files.git ${OPEN_CODE_PATH}/planning && \
     ln -s ${OPEN_CODE_PATH}/planning/.opencode/skills/planning-with-files ${SKILL_PATH}/ && \
-    # --- Install Superpowers skills. ---
+  # --- Install Superpowers skills. ---
     mkdir -p ${PLUGIN_PATH} && \
     git clone https://github.com/obra/superpowers.git ${OPEN_CODE_PATH}/superpowers && \
     ln -s ${OPEN_CODE_PATH}/superpowers/.opencode/plugins/superpowers.js ${PLUGIN_PATH}/ && \
     ln -s ${OPEN_CODE_PATH}/superpowers/skills ${SKILL_PATH}/superpowers && \
-    # Add default LLaMA model configuration for OpenCode.
+  # --- Add default LLaMA model configuration for OpenCode.
 echo "{\n\
   \"\$schema\": \"https://opencode.ai/config.json\",\n\
+  \"autoupdate\": true,\n\
   \"plugin\": [\"superpowers\"],\n\
   \"provider\": {\n\
     \"llamacpp\": {\n\
@@ -77,28 +76,36 @@ echo "{\n\
       \"name\": \"Local llama.cpp\",\n\
       \"options\": {\n\
         \"baseURL\": \"https://${LLM_HOST}/v1\",\n\
-        \"apiKey\": \"${LLM_CRED}\"\n\
+        \"apiKey\": \"{env:LOCAL_LLM_KEY}\"\n\
       },\n\
       \"models\": {\n\
-        \"qwen3-coder\": {\n\
-          \"name\": \"Local Qwen3-Coder\"\n\
+        \"qwen3.6\": {\n\
+          \"name\": \"Local Qwen3.6\"\n\
         }\n\
+      }\n\
+    },\n\
+    \"nvidia\": {\n\
+      \"npm\": \"@ai-sdk/openai-compatible\",\n\
+      \"name\": \"NVIDIA NIM\",\n\
+      \"options\": {\n\
+        \"baseURL\": \"https://integrate.api.nvidia.com/v1\",\n\
+        \"apiKey\": \"{env:NVIDIA_API_KEY}\"\n\
       }\n\
     }\n\
   },\n\
-  \"model\": \"llamacpp/qwen3-coder\"\n\
+  \"model\": \"nvidia/MiniMax-M2.7\"\n\
 }" > ${OPEN_CODE_PATH}/opencode.json && chown -R ${USER}:${USER} ${OPEN_CODE_PATH} && \
-    # Add default LLaMA model configuration for Continue extension.
+  # --- Add default LLaMA model configuration for Continue extension.
     mkdir -p /home/${USER}/.continue && \
 echo "name: Local Config\n\
 version: 1.0.0\n\
 schema: v1\n\
 models:\n\
-  - name: Local Qwen3-Coder\n\
+  - name: Local Qwen3.6\n\
     provider: llama.cpp\n\
-    model: Qwen3-Coder\n\
+    model: Qwen3.6\n\
     apiBase: https://${LLM_HOST}\n\
-    apiKey: ${LLM_CRED}\n\
+    apiKey: ${LOCAL_LLM_KEY}\n\
     temperature: 0.6\n\
     roles:\n\
       - chat\n\
@@ -109,8 +116,8 @@ models:\n\
   - name: Local Qwen3-Completer\n\
     provider: llama.cpp\n\
     model: Qwen3-Completer\n\
-    apiBase: https://${LLM_HOST}:333\n\
-    apiKey: 93fd7e5b3608bc614daf197be0a5082dc22efa4a8fe3eec9eeea38b03c17d79c\n\
+    apiBase: https://${LLM_HOST}:4433\n\
+    apiKey: ${LOCAL_COMP_KEY}\n\
     temperature: 0.2\n\
     roles:\n\
       - autocomplete\n\
@@ -121,13 +128,13 @@ opencode\n\
 pnpm test:coverage --ui" > /home/${USER}/.bash_history && chown ${USER}:${USER} /home/${USER}/.bash_history
 
 
-# Make default shell to zsh which is installed in the base image.
+# --- Make default shell to zsh which is installed in the base image.
 #ARG DEF_SHELL="/bin/zsh"
-    # Change default shell from bash to zsh for the root and node users only.
+  # --- Change default shell from bash to zsh for the root and node users only.
     #sed -i -E "s|^(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:).*|\1${DEF_SHELL}|" /etc/passwd && \
     #sed -i -E "s|^(node:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:).*|\1${DEF_SHELL}|" /etc/passwd && \
 
-    # Construct a SSH local forwarding tunnel to ${LLM_HOST} if obsence (required for early release Continue).
+  # --- Construct a SSH local forwarding tunnel to ${LLM_HOST} if obsence (required for early release Continue).
 #    echo '#nvm alias default $NODE_VERSION && nvm use default\n\n\
 #LAN_LLM_HOST="${LLM_HOST}"\n\
 #if ! nc -z localhost ${LLM_PORT}; then\n\
@@ -138,19 +145,19 @@ pnpm test:coverage --ui" > /home/${USER}/.bash_history && chown ${USER}:${USER} 
 #    echo "Port ${LLM_PORT} is already listening."\n\
 #fi' >> /etc/zsh/zshrc && \
 
-    # One time installation, it's hard to update to newer version.
-    # --- Install Anthropic skills. ---
+  # --- One time installation, it's hard to update to newer version.
+  # --- Install Anthropic skills. ---
     #git clone --depth 1 https://github.com/anthropics/skills.git /tmp/anthropic-skills && \
     #cp -r /tmp/anthropic-skills/skills/* ${SKILL_PATH}/ && rm -rf /tmp/anthropic-skills && \
-    # --- Install Superpowers skills. ---
+  # --- Install Superpowers skills. ---
     #git clone https://github.com/obra/superpowers.git ${OPEN_CODE_PATH}/superpowers && \
     #cp /tmp/superpowers/.opencode/plugins/superpowers.js ${PLUGIN_PATH}/ && \
     #mv /tmp/superpowers/skills ${SKILL_PATH}/superpowers && rm -rf /tmp/superpowers && \
-    # --- Install 'Planning with Files' skill ---
+  # --- Install 'Planning with Files' skill ---
     #git clone https://github.com/OthmanAdi/planning-with-files.git /tmp/planning && \
     #cp -r /tmp/planning/.opencode/skills/* ${SKILL_PATH}/ && rm -rf /tmp/planning && \
 
-# The tslint, typescript and eslint are installed in the base image.
+# --- The tslint, typescript and eslint are installed in the base image.
 #ARG NODE_MODULES="tslint-to-eslint-config typescript"
 #RUN su node -c "umask 0002 && npm install -g ${NODE_MODULES}" \
 #    && npm cache clean --force > /dev/null 2>&1

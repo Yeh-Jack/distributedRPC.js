@@ -16,7 +16,14 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "json", "lcov", "html"],
       include: ["src/**/*.ts"],
-      exclude: ["src/__tests__/", "src/main.ts"],
+      exclude: [
+        "src/__tests__/",
+        "src/main.ts",
+        "src/procedure/index.ts",
+        // Below files need integration test for coverage.
+        "src/network/tcp-client.ts",
+        "src/network/udp-discovery.ts",
+      ],
     },
   },
 });

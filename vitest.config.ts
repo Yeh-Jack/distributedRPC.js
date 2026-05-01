@@ -20,9 +20,6 @@ export default defineConfig({
         "src/__tests__/",
         "src/main.ts",
         "src/procedure/index.ts",
-        // Below files need integration test for coverage.
-        "src/network/tcp-client.ts",
-        "src/network/udp-discovery.ts",
       ],
     },
   },

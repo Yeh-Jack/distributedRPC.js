@@ -112,6 +112,7 @@ export class ReportProcedure extends Procedure {
         await this.delay(retryDelay);
       }
     }
+    (this.context as ReportContext).result = success;
   }
 
   /**

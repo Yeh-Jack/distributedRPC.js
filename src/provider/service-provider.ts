@@ -477,14 +477,20 @@ export class ServiceProvider {
       tasks: this.tasks,
       idGenerator: this.idGenerator,
 
-      manager: this._manager,
       apiCounter: this._apiCounter,
+      manager: this._manager,
+      result: false,
 
       ask: this.ask.bind(this),
       buildMessage: this.buildMessage.bind(this),
     };
 
     await procedure.execute(context);
+    if (!context.result) {
+      // Failed to report to ServiceManager meaning lost connection to it.
+      // Thus, discover ServiceManager instances again.
+      await this._discoverServiceManager();
+    }
   }
 
   protected async response(respArgs: ResponseArgs): Promise<void> {
@@ -709,6 +715,13 @@ export class ServiceProvider {
     // Prevent multiple discovery procedures run.
     if (this._procedure.discovery) return;
     this._procedure.discovery = true; // Booking this procedure in minimal time.
+    this._managerInfo = [];
+    this._manager = {};
+    if (this.tasks.has(this._TASK_MANAGER)) {
+      const smTask = this.tasks.get(this._TASK_MANAGER);
+      smTask.stop();
+      this.tasks.delete(this._TASK_MANAGER);
+    }
 
     // Lazy initialization of the procedure.
     const { DiscoverProcedure } = await import("../procedure");

@@ -15,6 +15,7 @@ export interface ProcedureContext {
   taskName: string;
   tasks: Map<string, any>;
   idGenerator: IdGenerator;
+  result?: any;
 }
 
 /**

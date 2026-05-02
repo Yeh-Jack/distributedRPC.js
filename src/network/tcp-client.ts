@@ -298,19 +298,21 @@ export class TcpClient extends TypedEventEmitter<NetworkEventMap> {
     this.logger.info(
       `Disconnecting the ${this.getArrowedName()} TCP client...`,
     );
-    this._setState(ExecutionState.Stopped);
+    this._setState(ExecutionState.Stopping);
 
     this._abortController.abort();
     this._retryScheduler?.stop();
 
-    if (!this._socket) return;
+    if (this._socket) {
+      // Finish the _connectionSpan.
+      this._connectionSpan?.end();
+      this._connectionSpan = undefined;
 
-    // Finish the _connectionSpan.
-    this._connectionSpan?.end();
-    this._connectionSpan = undefined;
+      this._socket.destroy();
+      this._socket = undefined;
+    }
 
-    this._socket.destroy();
-    this._socket = undefined;
+    this._setState(ExecutionState.Stopped);
   }
 
   /**

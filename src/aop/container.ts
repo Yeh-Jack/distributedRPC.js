@@ -31,6 +31,7 @@ export { TYPES };
 /**
  * Global InversifyJS container instance.
  * All application dependencies are registered and resolved through this container.
+ * Singletons are pre-bound for DiscoverProcedure, RegisterProcedure, and ReportProcedure.
  */
 export const container = new Container();
 
@@ -104,6 +105,14 @@ export function createOtelExporter(configManager: ConfigManager) {
   }
 }
 
+/**
+ * Binds a service class to the container and returns a ready-to-use instance.
+ * The instance is activated via onActivation which reloads configuration and
+ * instruments the service with execution time metrics.
+ *
+ * @param serviceClass - The service class constructor to bind and instantiate.
+ * @returns Promise resolving to the activated service instance.
+ */
 export async function createProvider<T extends ServiceProvider>(
   serviceClass: new (...args: any[]) => T,
 ): Promise<T> {
@@ -118,6 +127,14 @@ export async function createProvider<T extends ServiceProvider>(
   return container.getAsync<T>(serviceClass);
 }
 
+/**
+ * Factory for creating UdpDiscovery instances bound to the DI container.
+ *
+ * @param configManager - The configuration manager for server settings.
+ * @param name - Unique identifier for the discovery instance.
+ * @param type - The DI binding type symbol (only UdpDiscovery is supported).
+ * @returns A new UdpDiscovery instance if type matches, otherwise undefined.
+ */
 export function createServiceManagerDiscover(
   configManager: ConfigManager,
   name: string,

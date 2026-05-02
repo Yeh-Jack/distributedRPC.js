@@ -12,6 +12,13 @@ import { ConfigManager } from "./common/config";
 
 const INTERRUPT_KEY = "<Ctrl+C>";
 
+/**
+ * Sets up signal handlers for graceful shutdown of all service providers.
+ * Handles SIGINT (Ctrl+C), SIGABRT, SIGHUP, and SIGTERM signals.
+ *
+ * @param providers - Array of ServiceProvider instances to shut down
+ * @param logger - Logger instance for outputting shutdown messages
+ */
 function handleInterruption(providers: ServiceProvider[], logger: any) {
   const stopAll = async () => {
     const promises = providers.map((provider) => {

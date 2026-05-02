@@ -15,7 +15,6 @@ export interface ProcedureContext {
   taskName: string;
   tasks: Map<string, any>;
   idGenerator: IdGenerator;
-  result?: any;
 }
 
 /**
@@ -45,6 +44,11 @@ export abstract class Procedure {
     throw new Error(`${clazName}.execute() is not implemented.`);
   }
 
+  /**
+   * Returns the execution context for this procedure.
+   *
+   * @returns The ProcedureContext containing shared variables and task information
+   */
   public getContext(): ProcedureContext {
     return this.context;
   }
@@ -73,10 +77,11 @@ export abstract class Procedure {
   }
 
   /**
-   * Initializes and starts a TCP server.
+   * Initializes and starts a TCP client for communicating with a remote endpoint.
    *
-   * @param name - Unique name for this listener.
-   * @returns Promise that resolves when the listener is started.
+   * @param name - Unique name for this client task.
+   * @param ap - AccessPoint containing address and port of the remote endpoint.
+   * @returns Promise that resolves to the initialized TcpClient.
    */
   protected async initializeTcpClient(
     name: string,

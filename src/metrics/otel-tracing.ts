@@ -29,22 +29,36 @@ import {
 } from "../provider/provider-info";
 
 /**
- * Tracer configuration options
+ * Options for creating network-related spans with protocol and direction metadata.
  */
 export interface NetworkSpanOptions {
+  /** Optional descriptive message for the span. */
   message?: string;
+  /** Target or source address for the network operation. */
   address?: string;
+  /** Target or source port for the network operation. */
   port?: number;
+  /** Network protocol being used (TCP or UDP). */
   protocol?: NetworkProtocol;
+  /** Direction of the network traffic (inbound or outbound). */
   direction?: NetworkDirection;
+  /** Additional attributes to attach to the span. */
   attributes?: Record<string, ProviderAttributeValue>;
+  /** Parent span or context for trace propagation. */
   parent?: Span | Context;
 }
 
+/**
+ * Options for creating general-purpose spans with kind and timing configuration.
+ */
 export interface SpanOptions {
+  /** The kind of span (e.g., INTERNAL, SERVER, CLIENT). Defaults to INTERNAL. */
   kind?: SpanKind;
+  /** Additional attributes to attach to the span. */
   attributes?: Record<string, ProviderAttributeValue>;
+  /** Parent span or context for trace propagation. */
   parent?: Span | Context;
+  /** Explicit start time for the span in milliseconds since epoch. */
   startTime?: number;
 }
 
@@ -88,6 +102,13 @@ export interface SpanOptions {
 export class OtelTracer {
   private static _instances: Map<string, OtelTracer> = new Map();
 
+  /**
+   * Gets or creates a singleton OtelTracer instance for the given provider ID.
+   *
+   * @param providerId - Unique identifier for the provider creating the tracer.
+   * @param provider - Optional ProviderState instance for configuration.
+   * @returns The singleton OtelTracer instance.
+   */
   public static getInstance(
     providerId: string,
     provider?: ProviderState,
@@ -157,7 +178,11 @@ export class OtelTracer {
   }
 
   /**
-   * Creates a span for network operations
+   * Creates a span for network operations with TCP/UDP protocol metadata.
+   *
+   * @param operation - The network operation name (e.g., "connect", "write", "read").
+   * @param options - Network span options including address, port, protocol, and direction.
+   * @returns A new Span instance for the network operation.
    */
   public createNetworkSpan(
     operation: string,
@@ -190,7 +215,12 @@ export class OtelTracer {
   }
 
   /**
-   * Creates a span for UDP broadcast discovery
+   * Creates a span for UDP broadcast discovery operations.
+   * Sets protocol to UDP and prefixes operation name with "broadcast.".
+   *
+   * @param operation - The broadcast operation name.
+   * @param options - Network span options for the broadcast.
+   * @returns A new Span instance for the broadcast operation.
    */
   public createBroadcastSpan(
     operation: string,
@@ -200,6 +230,11 @@ export class OtelTracer {
     return this.createNetworkSpan(`broadcast.${operation}`, options);
   }
 
+  /**
+   * Gets the provider identity string from the provider state.
+   *
+   * @returns The provider identity identifier.
+   */
   public getProviderIdentity(): string {
     return this._providerState.getProviderIdentity();
   }
@@ -212,7 +247,11 @@ export class OtelTracer {
   }
 
   /**
-   * Records an exception on a span
+   * Records an exception on a span and sets the span status to ERROR.
+   *
+   * @param span - The span to record the exception on.
+   * @param error - The error/exception to record.
+   * @param attributes - Optional additional attributes to set on the status.
    */
   public recordException(
     span: Span,
@@ -227,6 +266,11 @@ export class OtelTracer {
     });
   }
 
+  /**
+   * Sets the provider state for this tracer.
+   *
+   * @param provider - The ProviderState instance to use.
+   */
   public setProviderState(provider: ProviderState): void {
     this._providerState = provider;
   }
@@ -236,6 +280,12 @@ export class OtelTracer {
     this._tracer = provider.getTracer("distributed-rpc");
   }
 
+  /**
+   * Shuts down the tracer provider, flushing any pending spans.
+   * After shutdown, the tracer will be disabled.
+   *
+   * @returns Promise that resolves when shutdown is complete.
+   */
   public async shutdown(): Promise<void> {
     if (this._tracerProvider) {
       await this._tracerProvider.shutdown();

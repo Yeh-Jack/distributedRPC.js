@@ -17,7 +17,7 @@ import { TcpClient } from "../network/tcp-client";
 export const EVENT_PVD_REGISTERED = "pvd_registered";
 
 /**
- * Manager info interface containing register API spec.
+ * Interface containing the ServiceManager's API specifications for registration.
  */
 export interface RegisterManagerInfo {
   apis: {
@@ -65,10 +65,8 @@ export class RegisterProcedure extends Procedure {
   /**
    * Registers the service provider to the ServiceManager.
    *
-   * @param taskChannelResponse - Name of the response channel task
-   * @param taskManager - Name of the manager task
    * @param context - Execution context with dependencies
-   * @returns Promise resolving when registration attempt completes
+   * @returns Promise resolving to true if registration succeeded, false otherwise
    */
   public override async execute(context?: RegisterContext): Promise<boolean> {
     // Initiate variables.

@@ -266,6 +266,10 @@ export class OtelProviderState extends ProviderState {
 
   /**
    * Creates an ObservableCallback for reporting server state to OpenTelemetry.
+   * The callback reports service name, instance ID, and current execution state
+   * as metric attributes with a numeric state value.
+   *
+   * @returns ObservableCallback function that updates the metric with current state
    */
   public createCallback(): ObservableCallback {
     if (!this._callback) {
@@ -282,33 +286,72 @@ export class OtelProviderState extends ProviderState {
   }
 
   /**
-   * Gets the cached ObservableCallback.
+   * Gets the cached ObservableCallback for server state reporting.
+   *
+   * @returns The ObservableCallback if created, undefined otherwise.
    */
   public getCallback(): ObservableCallback | undefined {
     return this._callback;
   }
 }
 
+/**
+ * Provides OpenTelemetry metrics instrumentation for service providers.
+ * Manages application-level and network-level meters with pre-configured metrics
+ * for execution time, retries, connections, and data transfer monitoring.
+ *
+ * @example
+ * ```typescript
+ * const metrics = new OtelMeterics(resourceAttributes, providerState);
+ * metrics.getExecutionTime().record(150, { method: 'processOrder' });
+ * await metrics.shutdown();
+ * ```
+ */
 export class OtelMeterics {
+  /** MeterProvider instance for OpenTelemetry SDK */
   private _provider: MeterProvider;
+  /** Application-level meter for business metrics */
   private _appMeter: Meter;
+  /** Network-level meter for infrastructure metrics */
   private _netMeter: Meter;
+  /** Optional provider state for callback-based gauges */
   private _providerState?: OtelProviderState;
 
+  /** Histogram for method execution timing */
   private _executionTime?: Histogram;
+  /** Counter for retry attempt tracking */
   private _retryAttempts?: Counter;
+  /** Histogram for retry duration tracking */
   private _retryDuration?: Histogram;
+  /** Observable gauge for server state reporting */
   private _serverState?: ObservableGauge;
+  /** Observable gauge for listener state reporting */
   private _listenerState?: ObservableGauge;
+  /** UpDownCounter for active TCP connections */
   private _activeConnections?: UpDownCounter;
+  /** Counter for total bytes transferred */
   private _bytesCounter?: Counter;
+  /** Counter for UDP broadcast requests received */
   private _udpBroadcastRequests?: Counter;
+  /** Counter for UDP broadcast responses sent */
   private _udpBroadcastResponses?: Counter;
+  /** Histogram for UDP broadcast latency */
   private _udpBroadcastLatency?: Histogram;
+  /** Histogram for TCP connection duration */
   private _tcpConnectionDuration?: Histogram;
+  /** Counter for failed TCP connections */
   private _tcpConnectionsFailed?: Counter;
+  /** Histogram for TCP data transfer size */
   private _tcpDataTransferSize?: Histogram;
 
+  /**
+   * Constructs an OtelMeterics instance with the specified resource attributes.
+   * Initializes MeterProvider, creates application and network meters,
+   * sets up all metric instruments, and registers callbacks for observable gauges.
+   *
+   * @param providerAttr - Resource attributes (service name, instance, version) for metric identification
+   * @param providerState - Optional provider state for callback-based metric reporting
+   */
   constructor(
     providerAttr: DetectedResourceAttributes,
     providerState?: OtelProviderState,
@@ -323,6 +366,10 @@ export class OtelMeterics {
     this._registerCallbacks();
   }
 
+  /**
+   * Registers ObservableCallback for server state and listener state gauges
+   * if provider state is available. Called during construction.
+   */
   private _registerCallbacks(): void {
     if (this._providerState) {
       const callback = this._providerState.createCallback();
@@ -335,6 +382,10 @@ export class OtelMeterics {
     }
   }
 
+  /**
+   * Creates and initializes all metric instruments including histograms,
+   * counters, and observable gauges for application and network metrics.
+   */
   private _createInstruments(): void {
     this._executionTime = this._appMeter.createHistogram(
       "method_execution_time",
@@ -410,66 +461,147 @@ export class OtelMeterics {
     );
   }
 
+  /**
+   * Gets the execution time histogram for recording method execution durations.
+   *
+   * @returns The Histogram instance or undefined if not initialized.
+   */
   public getExecutionTime(): Histogram | undefined {
     return this._executionTime;
   }
 
+  /**
+   * Gets the retry attempts counter for tracking job retry frequency.
+   *
+   * @returns The Counter instance or undefined if not initialized.
+   */
   public getRetryAttempts(): Counter | undefined {
     return this._retryAttempts;
   }
 
+  /**
+   * Gets the retry duration histogram for measuring time spent in retries.
+   *
+   * @returns The Histogram instance or undefined if not initialized.
+   */
   public getRetryDuration(): Histogram | undefined {
     return this._retryDuration;
   }
 
+  /**
+   * Gets the server state observable gauge for reporting current server state.
+   *
+   * @returns The ObservableGauge instance or undefined if not initialized.
+   */
   public getServerState(): ObservableGauge | undefined {
     return this._serverState;
   }
 
+  /**
+   * Gets the listener state observable gauge for reporting network listener status.
+   *
+   * @returns The ObservableGauge instance or undefined if not initialized.
+   */
   public getListenerState(): ObservableGauge | undefined {
     return this._listenerState;
   }
 
+  /**
+   * Gets the active connections up/down counter for tracking TCP connection count.
+   *
+   * @returns The UpDownCounter instance or undefined if not initialized.
+   */
   public getActiveConnections(): UpDownCounter | undefined {
     return this._activeConnections;
   }
 
+  /**
+   * Gets the bytes counter for tracking total network traffic.
+   *
+   * @returns The Counter instance or undefined if not initialized.
+   */
   public getBytesCounter(): Counter | undefined {
     return this._bytesCounter;
   }
 
+  /**
+   * Gets the UDP broadcast requests counter for tracking discovery requests received.
+   *
+   * @returns The Counter instance or undefined if not initialized.
+   */
   public getUdpBroadcastRequests(): Counter | undefined {
     return this._udpBroadcastRequests;
   }
 
+  /**
+   * Gets the UDP broadcast responses counter for tracking discovery responses sent.
+   *
+   * @returns The Counter instance or undefined if not initialized.
+   */
   public getUdpBroadcastResponses(): Counter | undefined {
     return this._udpBroadcastResponses;
   }
 
+  /**
+   * Gets the UDP broadcast latency histogram for measuring discovery response times.
+   *
+   * @returns The Histogram instance or undefined if not initialized.
+   */
   public getUdpBroadcastLatency(): Histogram | undefined {
     return this._udpBroadcastLatency;
   }
 
+  /**
+   * Gets the TCP connection duration histogram for measuring connection lifetimes.
+   *
+   * @returns The Histogram instance or undefined if not initialized.
+   */
   public getTcpConnectionDuration(): Histogram | undefined {
     return this._tcpConnectionDuration;
   }
 
+  /**
+   * Gets the TCP connections failed counter for tracking connection errors.
+   *
+   * @returns The Counter instance or undefined if not initialized.
+   */
   public getTcpConnectionsFailed(): Counter | undefined {
     return this._tcpConnectionsFailed;
   }
 
+  /**
+   * Gets the TCP data transfer size histogram for measuring payload sizes.
+   *
+   * @returns The Histogram instance or undefined if not initialized.
+   */
   public getTcpDataTransferSize(): Histogram | undefined {
     return this._tcpDataTransferSize;
   }
 
+  /**
+   * Gets the network-level meter for creating additional network metrics.
+   *
+   * @returns The Meter instance for network metrics.
+   */
   public getNetMeter(): Meter {
     return this._netMeter;
   }
 
+  /**
+   * Gets the application-level meter for creating additional application metrics.
+   *
+   * @returns The Meter instance for application metrics.
+   */
   public getAppMeter(): Meter {
     return this._appMeter;
   }
 
+  /**
+   * Shuts down the MeterProvider and releases all resources.
+   * Should be called during service shutdown to ensure proper cleanup.
+   *
+   * @returns Promise that resolves when shutdown is complete.
+   */
   public async shutdown(): Promise<void> {
     await this._provider.shutdown();
   }

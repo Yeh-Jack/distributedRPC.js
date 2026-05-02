@@ -1,11 +1,15 @@
-// Time unit constants.
+/**
+ * Time unit constants in milliseconds.
+ */
 export const SECOND = 1000;
 export const MINUTE = 60 * SECOND;
 export const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
 export const WEEK = 7 * DAY;
 
-// Standard keywords.
+/**
+ * Standard keyword constants.
+ */
 export const DEFAULT_ENCODE = "utf-8";
 export const FOLLOW_UP = "  --> ";
 export const MAX_HEADER_LEN = 64;
@@ -13,10 +17,15 @@ export const NO_RESPONSE = "None";
 export const PROBE_MESSAGE = "Bonjour and EnjoIT.";
 export const UNKNOWN_ATTRIBUTE = "Unknown";
 
-// Connection information of service provider.
+/**
+ * Network access point for a service provider.
+ * Extends SocketAddress with authorization and API capabilities.
+ */
 export interface AccessPoint extends SocketAddress {
-  authorization: string; // Authorization key for accessing this provider.
-  api: string[]; // Capbilities of the provider.
+  /** Authorization key for accessing this provider. */
+  authorization: string;
+  /** API capabilities/endpoints supported by this provider. */
+  api: string[];
 }
 
 /**
@@ -29,23 +38,35 @@ export enum AckType {
   Double = "Double", // Requester send ACK back to the handler to confirm the response received.
 }
 
+/**
+ * Acknowledgement values for API responses.
+ * Used to indicate the result status of a request.
+ */
 export enum AckValue {
-  Ack = "Ack", // The ACK message.
-  Error = "Error", // Failed to process the request.
-  InvalidReqData = "InvalidReqData", // Failed on invalid request data.
-  None = "None", // No ACK.
+  /** Acknowledgement message indicating successful receipt. */
+  Ack = "Ack",
+  /** Error occurred while processing the request. */
+  Error = "Error",
+  /** Request data was invalid or malformed. */
+  InvalidReqData = "InvalidReqData",
+  /** No acknowledgement required. */
+  None = "None",
 }
 
 /**
- * Data structure for any remote procedure call or API.
- * Join the `group`, `intermediate` and `inst` elements for the full path of the RPC.
- * You can think of the full path as API path.
+ * Represents a remote procedure call or API request.
+ * The full RPC path is formed by joining `peer.service`, `peer.instance`, and `api`.
  */
 export interface ApiCall {
+  /** Identity of the calling peer (service name and instance ID). */
   peer: PeerIdentity;
-  api: string; // Path (delimite by '/') name of the procedure.
-  args: any | undefined; // Arguments for the procedure call.
+  /** API path delimited by '/', identifying the procedure to invoke. */
+  api: string;
+  /** Arguments passed to the procedure call. */
+  args: any | undefined;
+  /** Unique message identifier for tracking requests. */
   msgId: string | undefined;
+  /** Internal promise for correlating async responses. */
   promise?: {
     resolve: Function;
     reject: Function;
@@ -67,10 +88,15 @@ export interface ApiCounter {
   total?: number;
 }
 
-// Interface or type name for an API format.
+/**
+ * Specification for an API endpoint defining request/response types and acknowledgement behavior.
+ */
 export interface ApiSpec {
+  /** Type name for the request payload. */
   request: string;
+  /** Type name for the response payload, or "None" if no response. */
   response: string;
+  /** Acknowledgement type required for this API. */
   ack: AckType;
 }
 
@@ -190,11 +216,20 @@ export enum NetworkProtocol {
   UDP = "UDP",
 }
 
+/**
+ * Uniquely identifies a service provider instance.
+ */
 export interface PeerIdentity {
+  /** Name of the service. */
   service: string;
+  /** Unique instance identifier for this service. */
   instance: string;
 }
 
+/**
+ * Complete connection information for a service provider.
+ * Combines network access point details with provider metadata.
+ */
 export type ProviderConnectInfo = AccessPoint & BasalProtocol["provider"];
 
 /**
@@ -230,11 +265,19 @@ export interface ReportData {
   apiCounter?: Map<string, Omit<ApiCounter, "total">>;
 }
 
+/**
+ * Arguments passed to response handlers for API calls.
+ */
 export interface ResponseArgs {
+  /** API specification defining the contract for this call. */
   apiSpec: ApiSpec;
+  /** Response data payload. */
   data: any;
+  /** Acknowledgement value indicating success or failure type. */
   errType: AckValue;
+  /** Original API call that triggered this response. */
   request: ApiCall;
+  /** Target object or service handling the response. */
   target: any;
 }
 
@@ -249,19 +292,25 @@ export interface RestCall extends ApiCall {
 }
 
 /**
- * Type of discovering service manager.
+ * Service manager discovery modes.
+ * Determines how service providers locate the service manager.
  */
 export const ServiceManagerDiscovery = {
+  /** No service manager discovery - providers operate independently. */
   None: Symbol.for("None"),
+  /** UDP broadcast-based service manager discovery. */
   UDP: Symbol.for("UdpDiscovery"),
 };
 
+/**
+ * Network socket address for a service endpoint.
+ */
 export interface SocketAddress {
-  // Remote IP address.
+  /** Remote IP address or hostname. */
   address: string;
-  // Remote port number.
+  /** Port number for the connection. */
   port: number;
-  // Protocol of the connection.
+  /** Network protocol (TCP or UDP). */
   protocol: NetworkProtocol;
 }
 

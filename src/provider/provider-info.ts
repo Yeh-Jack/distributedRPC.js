@@ -34,46 +34,29 @@ export const DEFAULT_RESOURCE: Required<ProviderInfo> = Object.freeze({
   [ATTR_DEPLOY_ENV]: UNKNOWN_ATTRIBUTE,
 });
 /**
- * Centralized server state tracking for OpenTelemetry span attributes.
+ * Service provider state tracking for OpenTelemetry span attributes.
  *
- * This utility class maintains server state information that is automatically
- * included as attributes in all created spans. It provides a thread-safe way
- * to track state transitions and make this information available to the
- * tracing system.
- *
- * Key Features:
- * - Thread-safe state management
- * - Automatic attribute inclusion in spans
- * - Service identity tracking
- * - State change notifications to tracing system
- *
- * @remarks
- * ServerStateSpan is used throughout the distributed RPC system to ensure
- * that all spans include relevant server state information. This enables
- * better observability and debugging capabilities by correlating spans
- * with the server's operational state.
- *
- * @example
- * ```typescript
- * // Update server state
- * ServerStateSpan.setState(ServerState.Listening, "OrderService", "inst-1");
- *
- * // Get common attributes for span creation
- * const attributes = ServerStateSpan.getCommonAttributes();
- * // Returns: { "service.name": "OrderService", "service.instance": "inst-1", "server.state": "Listening" }
- * ```
+ * Maintains provider state information that is automatically included as
+ * attributes in all created spans. Provides state change notifications
+ * to the tracing system.
  */
-
 export class ProviderState {
   protected provider!: ProviderInfo;
   protected state: ExecutionState = ExecutionState.Stopped;
 
+  /**
+   * Creates a ProviderState instance.
+   *
+   * @param provider - The provider info to associate with this state
+   */
   public constructor(provider: ProviderInfo) {
     this.setProvider(provider);
   }
 
   /**
-   * Gets common attributes.
+   * Gets common attributes for span creation.
+   *
+   * @returns Record containing provider identity and service state
    */
   public getCommonAttributes(): Record<string, ProviderAttributeValue> {
     return {
@@ -82,27 +65,46 @@ export class ProviderState {
     };
   }
 
+  /**
+   * Gets the provider information.
+   *
+   * @returns The ProviderInfo object
+   */
   public getProvider(): ProviderInfo {
     return this.provider;
   }
 
+  /**
+   * Gets the provider identity string.
+   *
+   * @returns Identity in format "{service.name}-{service.instance}"
+   */
   public getProviderIdentity(): string {
     return `${this.provider[ATTR_SERVICE_NAME]}-${this.provider[ATTR_SERVICE_INSTANCE]}`;
   }
 
   /**
    * Gets current state of the provider.
+   *
+   * @returns The current ExecutionState
    */
   public getState(): ExecutionState {
     return this.state;
   }
 
+  /**
+   * Sets the provider information.
+   *
+   * @param provider - The provider info to set
+   */
   public setProvider(provider: ProviderInfo): void {
     this.provider = provider;
   }
 
   /**
    * Sets the service provider state for span attributes.
+   *
+   * @param state - The new execution state
    */
   public setState(state: ExecutionState): void {
     this.state = state;

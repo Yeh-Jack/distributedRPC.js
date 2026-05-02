@@ -80,6 +80,10 @@ export class LoggerManager {
     this.reload();
   }
 
+  /**
+   * Closes all active transports and releases resources.
+   * Should be called during application shutdown.
+   */
   public close(): void {
     this._logger.close();
   }
@@ -171,6 +175,11 @@ export class LoggerManager {
     });
   }
 
+  /**
+   * Updates the ConfigManager reference for reloading configuration.
+   *
+   * @param configManager - The new configuration manager instance.
+   */
   public setConfigManager(configManager: ConfigManager): void {
     this._configManager = configManager;
   }

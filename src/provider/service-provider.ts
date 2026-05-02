@@ -57,31 +57,61 @@ import {
 
 @injectable()
 export class ServiceProvider {
+  // Task name of the API channel.
   protected readonly _TASK_CHANNEL_API: string = "_chnAPI";
+
+  // Task name of the response channel.
   protected readonly _TASK_CHANNEL_RESPONSE: string = "_chnResponse";
+
+  // Task name of the system instruction channel.
+  protected readonly _TASK_CHANNEL_SYS: string = "_chnSys";
+
+  // Task name for the ServiceManager client.
   protected readonly _TASK_MANAGER: string = "_svcManager";
+
+  // Protocol of this service.
   protected readonly PROTOCOL: BasalProtocol;
 
   protected configManager: ConfigManager;
   protected logger!: ReturnType<LoggerManager["getLogger"]>;
-  protected tasks: Map<string, any> = new Map(); // Internal tasks handler.
 
-  // Resources should be released during shutdown.
-  protected apis: any = {}; // Holds nested dynamic assigned api_name and function mapping.
-  // chnResp holds nested response channels and it's in the { service: { instance: TcpClient }} format.
+  // Internal map of tasks, task name is the key.
+  protected tasks: Map<string, any> = new Map();
+
+  // Map of API names to handler functions.
+  protected apis: any = {};
+
+  /*
+   * Response channels indexed by service name and instance ID.
+   * Structure: { service: { instance: TcpClient } }
+   */
   protected chnResp: Record<string, Record<string, TcpClient>> = {};
-  // polReqs stores API requests sent and it's in the { msgId: ApiCall } format.
+
+  /**
+   * Pending API requests pool, indexed by message ID.
+   * Structure: { msgId: ApiCall }
+   */
   protected polReqs: Map<string, ApiCall> = new Map();
+
+  // OpenTelemetry instances.
   protected metrics!: OtelMeterics;
   protected tracer!: OtelTracer;
 
+  // Keep API called execution statistics.
   private _apiCounter: Map<string, Omit<ApiCounter, "total">> = new Map();
-  private _initialized: boolean = false;
-  private _manager: any = {}; // Keep effective ServiceManager information.
+
+  // ServiceManager informations and instance.
+  private _manager: any = {};
   private _managerInfo: BroadcastResponse260321[] = [];
-  private _providerState!: ProviderState;
-  private _reportTimer: NodeJS.Timeout | null = null;
+
+  // Procedure instances.
   private _procedure: any = {};
+
+  // Timer for the scheduled status reporter.
+  private _reportTimer: NodeJS.Timeout | null = null;
+
+  private _initialized: boolean = false;
+  private _providerState!: ProviderState;
 
   /**
    * Creates a ServiceProvider instance.
@@ -109,10 +139,32 @@ export class ServiceProvider {
     this.shutdown();
   }
 
+  /**
+   * Activates this service provider if it's halted.
+   * @returns Promise that resolves when activation is complete.
+   */
   public async activate(): Promise<void> {
+    const acceptStates = [ExecutionState.Halt];
+    if (!acceptStates.includes(this.getState())) return;
+
+    this.logger.info(`Activating the ${this.getIdentity()} service ...`);
+    this.setState(ExecutionState.Starting);
+
     // TODO
+
+    this.logger.info(`${this.getIdentity()} is activated.`);
+    this.setState(ExecutionState.Running);
+    await this.report(); // Report status immediately.
   }
 
+  /**
+   * Sends an API call to a helper TCP client and tracks the pending request.
+   *
+   * @param helper - The TCP client to send the message through
+   * @param message - The API call message to send
+   * @param ackType - The acknowledgment type expected
+   * @returns Promise resolving to message ID and optional promise for response
+   */
   protected async ask(
     helper: TcpClient,
     message: ApiCall,
@@ -132,13 +184,27 @@ export class ServiceProvider {
     return { msgId, promise };
   }
 
+  /**
+   * Requests provider connection information from the ServiceManager.
+   *
+   * @param data - API call containing peer information
+   * @returns Promise resolving to ProviderConnectInfo or undefined if not available
+   */
   protected async askProviderInfo(
     data: ApiCall,
   ): Promise<ProviderConnectInfo | undefined> {
-    // TODO
+    // TODO: Implement provider info request
     return;
   }
 
+  /**
+   * Builds an API call message with peer identity and specified API path.
+   *
+   * @param apiPath - The API procedure path (e.g., "register", "report")
+   * @param args - Optional arguments to pass to the API procedure
+   * @param msgId - Optional message ID for tracking
+   * @returns The constructed ApiCall message
+   */
   protected buildMessage(apiPath: string, args?: any, msgId?: string): ApiCall {
     const peer: PeerIdentity = {
       service: this.PROTOCOL.provider.name,
@@ -155,6 +221,11 @@ export class ServiceProvider {
     return api;
   }
 
+  /**
+   * Collects provider information from the protocol configuration.
+   *
+   * @returns ProviderInfo object with service name, instance ID, version, and environment
+   */
   protected collectProviderInfo(): ProviderInfo {
     const provider = this.PROTOCOL.provider;
     const resource: ProviderInfo = {
@@ -178,6 +249,11 @@ export class ServiceProvider {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  /**
+   * Gets the configuration manager for this service.
+   *
+   * @returns The ConfigManager instance
+   */
   public getConfigManager(): ConfigManager {
     return this.configManager;
   }
@@ -195,6 +271,11 @@ export class ServiceProvider {
     return arrowed ? `<${msg}>` : msg;
   }
 
+  /**
+   * Gets the logger instance for this service.
+   *
+   * @returns The logger instance
+   */
   public getLogger() {
     return this.logger;
   }
@@ -208,6 +289,13 @@ export class ServiceProvider {
     return this.metrics;
   }
 
+  /**
+   * Extracts the peer identity from an API call message.
+   *
+   * @param data - The API call containing peer information
+   * @param arrowed - Whether to wrap the identity in angle brackets
+   * @returns The peer identity string
+   */
   protected getPeerId(data: ApiCall, arrowed: boolean = true): string {
     const peer: PeerIdentity = data.peer;
     const msg = `${peer.service}-${peer.instance}`;
@@ -215,12 +303,26 @@ export class ServiceProvider {
   }
 
   /**
-   * This is a remote instruction for description protocol format of this service provider.
+   * Returns the protocol configuration as a JSON string.
+   */
+  /**
+   * Returns the protocol configuration as a JSON string.
+   *
+   * @returns JSON string representation of the protocol configuration
    */
   public async getProtocol(): Promise<string> {
     return JSON.stringify(this.PROTOCOL);
   }
 
+  /**
+   * Gets or creates a response channel TCP client for a peer.
+   * If the channel doesn't exist, it queries the ServiceManager for provider
+   * connection info and creates a new TCP client.
+   *
+   * @param data - API call containing peer information
+   * @returns The TCP client for the response channel
+   * @throws Error if peer information is missing or provider info cannot be obtained
+   */
   protected async getResponseChannel(data: ApiCall): Promise<TcpClient> {
     const peer: PeerIdentity = data.peer;
     if (!(peer?.service && peer?.instance)) {
@@ -269,6 +371,11 @@ export class ServiceProvider {
     return channel;
   }
 
+  /**
+   * Returns the discovered ServiceManager information.
+   *
+   * @returns Array of BroadcastResponse260321 or null if not discovered
+   */
   protected getServiceManagerInfo(): BroadcastResponse260321[] | null {
     return this._managerInfo;
   }
@@ -282,6 +389,13 @@ export class ServiceProvider {
     return this.PROTOCOL.provider.name;
   }
 
+  /**
+   * Formats a socket address as a string.
+   *
+   * @param socketAddr - The socket address to format
+   * @param arrowed - Whether to wrap the address in angle brackets
+   * @returns Formatted address string (e.g., "<192.168.1.1:8080>")
+   */
   protected getSocketString(
     socketAddr: SocketAddress,
     arrowed: boolean = true,
@@ -290,10 +404,22 @@ export class ServiceProvider {
     return arrowed ? `<${msg}>` : msg;
   }
 
+  /**
+   * Gets the current execution state of the provider.
+   *
+   * @returns The current ExecutionState
+   */
   public getState(): ExecutionState {
     return this._providerState.getState();
   }
 
+  /**
+   * Gets a task by name from the internal tasks map.
+   *
+   * @param taskName - The name of the task to retrieve
+   * @returns The task instance
+   * @throws Error if the task doesn't exist
+   */
   protected getTask(taskName: string = this._TASK_CHANNEL_RESPONSE): any {
     const task = this.tasks.get(taskName);
     if (!task) {
@@ -304,6 +430,12 @@ export class ServiceProvider {
     return task;
   }
 
+  /**
+   * Gets TCP task information as an AccessPoint for the specified task.
+   *
+   * @param taskName - The task name (defaults to response channel)
+   * @returns AccessPoint with socket address and provider capabilities
+   */
   protected getTcpTaskInfo(
     taskName: string = this._TASK_CHANNEL_RESPONSE,
   ): AccessPoint {
@@ -319,10 +451,28 @@ export class ServiceProvider {
     return this.buildAccessPointInfo(srvInfo);
   }
 
+  /**
+   * Halts the service provider gracefully.
+   * @returns Promise that resolves when halt is complete.
+   */
   public async halt(): Promise<void> {
-    //TODO
+    const acceptStates = [ExecutionState.Running];
+    if (!acceptStates.includes(this.getState())) return;
+
+    this.logger.info(`Halting the ${this.getIdentity()} service ...`);
+    this.setState(ExecutionState.Halting);
+
+    // TODO
+
+    this.logger.info(`${this.getIdentity()} is halted.`);
+    this.setState(ExecutionState.Halt);
+    await this.report(); // Report status immediately.
   }
 
+  /**
+   * Initializes the API function map with all available handler methods.
+   * Maps API names to their handler methods on this instance.
+   */
   protected initializeApiFunctionMap(): void {
     this.apis = {
       activate: this.activate,
@@ -341,10 +491,11 @@ export class ServiceProvider {
   }
 
   /**
-   * Initializes and starts a TCP server.
+   * Initializes and starts a TCP client for communicating with a remote endpoint.
    *
-   * @param name - Unique name for this listener.
-   * @returns Promise that resolves when the listener is started.
+   * @param name - Unique name for this client task.
+   * @param ap - AccessPoint containing address and port of the remote endpoint.
+   * @returns Promise that resolves to the initialized TcpClient.
    */
   protected async initializeTcpClient(
     name: string,
@@ -404,6 +555,12 @@ export class ServiceProvider {
     );
   }
 
+  /**
+   * Registers this service provider with the ServiceManager.
+   * Retries registration until successful. Initializes RegisterProcedure lazily.
+   *
+   * @returns Promise that resolves when registration succeeds
+   */
   public async register(): Promise<void> {
     // Prevent multiple register procedures run.
     if (this._procedure.register) return;
@@ -479,20 +636,25 @@ export class ServiceProvider {
 
       apiCounter: this._apiCounter,
       manager: this._manager,
-      result: false,
 
       ask: this.ask.bind(this),
       buildMessage: this.buildMessage.bind(this),
     };
 
-    await procedure.execute(context);
-    if (!context.result) {
+    const success = await procedure.execute(context);
+    if (!success) {
       // Failed to report to ServiceManager meaning lost connection to it.
       // Thus, discover ServiceManager instances again.
       await this._discoverServiceManager();
     }
   }
 
+  /**
+   * Sends a response to an API request through the target TCP client.
+   * Builds a header with success/failure status and message ID, then sends the payload.
+   *
+   * @param respArgs - Response arguments including API spec, data, error type, request, and target
+   */
   protected async response(respArgs: ResponseArgs): Promise<void> {
     const { apiSpec, data, errType, request, target } = respArgs;
     if (!(target instanceof TcpClient)) return; // No target for respond.
@@ -545,7 +707,12 @@ export class ServiceProvider {
     await this.start();
   }
 
-  // API channel (for listen on API request) could be TcpServer or Redis stream (scheduled development).
+  /**
+   * Sets up the API channel TCP server for handling incoming API requests.
+   *
+   * @param subscribe - Whether to subscribe to data events
+   * @returns The initialized TCP server
+   */
   protected async setApiChannel(subscribe: boolean): Promise<TcpServer> {
     const task: TcpServer = await this.initializeTcpServer(
       this._TASK_CHANNEL_API,
@@ -555,13 +722,34 @@ export class ServiceProvider {
     return task;
   }
 
-  // API response channel (for response to request) is a TcpServer.
+  /**
+   * Sets up the response channel TCP server for receiving API responses from helper.
+   *
+   * @param subscribe - Whether to subscribe to data events
+   * @returns The initialized TCP server
+   */
   protected async setResponseChannel(subscribe: boolean): Promise<TcpServer> {
     const task: TcpServer = await this.initializeTcpServer(
       this._TASK_CHANNEL_RESPONSE,
     );
     if (subscribe) task.on(NetworkEvent.Data, this._handleApiResponse);
     else task.off(NetworkEvent.Data, this._handleApiResponse);
+    return task;
+  }
+
+  /**
+   * Sets up the system instruction channel TCP server for handling incoming
+   * service life-cycle instructions (ex: reload, restart, stop, shutdown, ...).
+   *
+   * @param subscribe - Whether to subscribe to data events
+   * @returns The initialized TCP server
+   */
+  protected async setSystemChannel(subscribe: boolean): Promise<TcpServer> {
+    const task: TcpServer = await this.initializeTcpServer(
+      this._TASK_CHANNEL_SYS,
+    );
+    if (subscribe) task.on(NetworkEvent.Data, this._handleTcpApiRequest);
+    else task.off(NetworkEvent.Data, this._handleTcpApiRequest);
     return task;
   }
 
@@ -586,8 +774,9 @@ export class ServiceProvider {
    */
   public async shutdown(): Promise<void> {
     await this.stop();
-    await this._stopReportSchedule();
+    await this._stopReportSchedule(); // Stop automatic reporting.
     await this._stopManagerTask();
+    await this.setSystemChannel(false); // Stop the system instruction channel.
     await this._releaseResources();
     this.logger.info(`${this.getIdentity()} shutdown complete.`);
   }
@@ -615,6 +804,9 @@ export class ServiceProvider {
     this.logger.debug(`Starting the service in subclass ...`);
     await this.starting(); // Start services on subclass.
     this.logger.debug(`${FOLLOW_UP}Service started in subclass.`);
+
+    // Establish a system instruction channel.
+    await this.setSystemChannel(true);
 
     // Start automatic reporting.
     await this._startReportSchedule();
@@ -648,7 +840,6 @@ export class ServiceProvider {
     }
     await Promise.all(wait);
 
-    await this._stopReportSchedule(); // Stop automatic reporting.
     this.logger.info(`${this.getIdentity()} stopped.`);
     this.setState(ExecutionState.Stopped);
     await this.report(); // Report the last status.
@@ -674,33 +865,56 @@ export class ServiceProvider {
     return baseInfo;
   }
 
+  /**
+   * Initializes resources specific to the subclass.
+   * Override this method to perform subclass-specific initialization.
+   *
+   * @throws {Error} If not implemented by subclass
+   */
   protected async initializingResources(): Promise<void> {
     if (this.constructor.name !== "ServiceProvider")
       throw new Error("Method initializing() is not implemented.");
   }
 
+  /**
+   * Releases resources specific to the subclass.
+   * Override this method to perform subclass-specific cleanup.
+   *
+   * @throws {Error} If not implemented by subclass
+   */
   protected async releasingResources(): Promise<void> {
     if (this.constructor.name !== "ServiceProvider")
       throw new Error("Method releasingResources() is not implemented.");
   }
 
+  /**
+   * Reloads configuration specific to the subclass.
+   * Override this method to handle subclass-specific reload logic.
+   *
+   * @throws {Error} If not implemented by subclass
+   */
   protected async reloading(): Promise<void> {
     if (this.constructor.name !== "ServiceProvider")
       throw new Error("Method reloading() is not implemented.");
   }
 
+  /**
+   * Starts services specific to the subclass.
+   * Override this method to perform subclass-specific startup logic.
+   *
+   * @throws {Error} If not implemented by subclass
+   */
   protected async starting(): Promise<void> {
     if (this.constructor.name !== "ServiceProvider")
       throw new Error("Method starting() is not implemented.");
   }
 
   /**
-   * Stops the service.
+   * Stops services specific to the subclass.
    * All tasks in the `tasks` map will be stopped automatically if the task has `stop()` method.
-   * This method should be implemented by subclasses to handle service shutdown logic.
-   * @throws {Error} If the method is not implemented by the subclass.
-   * @returns {Promise<void>} A promise that resolves when the service has been stopped.
-   * @protected
+   * Override this method to perform subclass-specific shutdown logic.
+   *
+   * @throws {Error} If not implemented by subclass
    */
   protected async stopping(): Promise<void> {
     if (this.constructor.name !== "ServiceProvider")
@@ -711,6 +925,11 @@ export class ServiceProvider {
   // Private Methods
   // --------------------------------------------
 
+  /**
+   * Discovers the ServiceManager and establishes a TCP client connection.
+   * Uses DiscoverProcedure to find available managers via UDP broadcast.
+   * Retries discovery until a manager is found and connected.
+   */
   private async _discoverServiceManager(): Promise<void> {
     // Prevent multiple discovery procedures run.
     if (this._procedure.discovery) return;
@@ -750,6 +969,13 @@ export class ServiceProvider {
     }
   }
 
+  /**
+   * Gets the socket address (IP and port) from a task.
+   *
+   * @param taskName - The task name to query
+   * @returns SocketAddress with address, port, and TCP protocol
+   * @throws Error if task is not a TCP server/client or is malfunctioning
+   */
   private _getSocketAddr(
     taskName: string = this._TASK_CHANNEL_RESPONSE,
   ): SocketAddress {
@@ -765,7 +991,7 @@ export class ServiceProvider {
     else if (task instanceof TcpClient)
       addr = task.getSocket()?.address() as any;
     else {
-      const message = `The <${taskName}> task is nither TCP server nor TCP client.`;
+      const message = `The <${taskName}> task is neither a TCP server nor a TCP client.`;
       this.logger.error(message);
       throw new Error(message);
     }
@@ -783,6 +1009,12 @@ export class ServiceProvider {
     return socketAddr;
   }
 
+  /**
+   * Handles incoming API request data from TCP.
+   * Parses JSON, executes the API handler, and sends response.
+   *
+   * @param data - Raw string or Buffer data from TCP
+   */
   private _handleApiRequest = async (data: string | Buffer): Promise<void> => {
     if (!data) {
       this.logger.debug(`Incomplete message received.`);
@@ -843,6 +1075,14 @@ export class ServiceProvider {
     }
   };
 
+  /**
+   * Handles API response data from the response channel.
+   * Extracts header (success/failure and message ID) and payload,
+   * then resolves or rejects the pending promise.
+   *
+   * @param peer - The network peer that sent the response
+   * @param data - The response data buffer
+   */
   private _handleApiResponse = ({
     peer,
     data,
@@ -885,6 +1125,13 @@ export class ServiceProvider {
     }
   };
 
+  /**
+   * Handles incoming data on a peer-specific response channel.
+   * Parses the JSON API call and invokes the corresponding handler method.
+   *
+   * @param peer - The network peer that sent the data
+   * @param data - The data buffer containing the API call JSON
+   */
   private _handleChannelResponse = ({
     peer,
     data,
@@ -921,6 +1168,11 @@ export class ServiceProvider {
     }
   };
 
+  /**
+   * Wraps _handleApiRequest with peer extraction for TCP server events.
+   *
+   * @param params - Object containing peer and data from TCP server event
+   */
   private _handleTcpApiRequest = async ({
     peer,
     data,
@@ -935,6 +1187,10 @@ export class ServiceProvider {
     await this._handleApiRequest(data);
   };
 
+  /**
+   * Initializes OpenTelemetry tracer and metrics.
+   * Replaces default ProviderState with OtelProviderState if needed.
+   */
   private async _initializeOtel(): Promise<void> {
     // Use OtelProviderState instead of the default ProviderState.
     const providerInfo = this._providerState.getProvider();
@@ -957,6 +1213,10 @@ export class ServiceProvider {
     this.metrics = new OtelMeterics(resourceAttr, otelProvider);
   }
 
+  /**
+   * Initializes resources including OpenTelemetry, TCP servers, and subclass resources.
+   * Sets up the response channel and marks provider as initialized.
+   */
   private async _initializeResources(): Promise<void> {
     this.logger.debug(`Initializing ${this.getIdentity()} ...`);
     this.setState(ExecutionState.Initializing);
@@ -976,6 +1236,12 @@ export class ServiceProvider {
     this.logger.debug(`${this.getIdentity()} initialized.`);
   }
 
+  /**
+   * Parses an API call request to extract the handler function and API spec.
+   *
+   * @param apiCall - The API call to parse
+   * @returns Object with api handler function and apiSpec, or undefined if not found
+   */
   private _parseRequest(
     apiCall: ApiCall,
   ): { api: Function; apiSpec: ApiSpec } | undefined {
@@ -1005,6 +1271,9 @@ export class ServiceProvider {
     return { api, apiSpec };
   }
 
+  /**
+   * Releases OpenTelemetry resources (metrics and tracer).
+   */
   private async _releaseOtel(): Promise<void> {
     const promises = [];
     if (this.metrics) {
@@ -1021,9 +1290,8 @@ export class ServiceProvider {
   }
 
   /**
-   * Releases allocated resources including metrics and callbacks.
-   *
-   * @returns Promise that resolves when resources are released.
+   * Releases all allocated resources including response channels and OpenTelemetry.
+   * Calls subclass releasingResources hook.
    */
   private async _releaseResources(): Promise<void> {
     this.logger.debug(`Cleanup ${this.getIdentity()} ...`);
@@ -1041,6 +1309,12 @@ export class ServiceProvider {
     this.logger.debug(`${this.getIdentity()} released.`);
   }
 
+  /**
+   * Releases all response channels (TCP clients) in the chnResp pool.
+   * Stops each channel and removes it from the registry.
+   *
+   * @throws Error if any channels cannot be released
+   */
   private async _releaseResponseChannels(): Promise<void> {
     this.logger.debug(`Release response channels ...`);
     // this.chnResp is in the { service: { instance: TcpClient }} format.
@@ -1070,9 +1344,9 @@ export class ServiceProvider {
   }
 
   /**
-   * Encapsulate jobs for setting ConfigManager.
+   * Updates the ConfigManager and syncs provider information.
    *
-   * @param configManager
+   * @param configManager - The new ConfigManager instance
    */
   private _setConfigManager(configManager: ConfigManager) {
     this.configManager = configManager;
@@ -1090,9 +1364,13 @@ export class ServiceProvider {
   /**
    * Starts the automatic report scheduling.
    * Reports are sent at configurable intervals after successful registration.
+   * @returns Promise that resolves when scheduling is set up or if reporting is disabled
    */
   private async _startReportSchedule(): Promise<void> {
     // Check preconditions
+    if (this._reportTimer) {
+      await this._stopReportSchedule(); // Stop the existing reporter.
+    }
     const reportConfig = this.configManager.getCoreConfig().report;
     if (!reportConfig?.enabled) {
       this.logger.info("Automatic reporting is disabled.");
@@ -1116,7 +1394,7 @@ export class ServiceProvider {
   }
 
   /**
-   * Stops the automatic report scheduling.
+   * Stops the automatic report scheduling timer.
    */
   private async _stopReportSchedule(): Promise<void> {
     if (this._reportTimer) {
@@ -1126,12 +1404,21 @@ export class ServiceProvider {
     }
   }
 
+  /**
+   * Stops the ServiceManager task if it exists.
+   */
   private async _stopManagerTask(): Promise<void> {
     if (this.tasks.has(this._TASK_MANAGER)) {
       await this._stopTask(this._TASK_MANAGER);
     }
   }
 
+  /**
+   * Stops a task by name and removes it from the tasks map.
+   *
+   * @param taskName - The name of the task to stop
+   * @returns Promise that resolves when the task is stopped
+   */
   private async _stopTask(taskName: string): Promise<void> {
     const task = this.tasks.get(taskName);
     if (!task || typeof task.stop !== "function") return;
@@ -1154,6 +1441,12 @@ export class ServiceProvider {
     return promise;
   }
 
+  /**
+   * Updates API call counter statistics based on error type.
+   *
+   * @param errType - The type of error that occurred
+   * @param json - The API call object
+   */
   private _updateApiCouynter(errType: AckValue, json: ApiCall) {
     // Update API counter statistics
     if (json?.api) {
@@ -1179,6 +1472,10 @@ export class ServiceProvider {
     }
   }
 
+  /**
+   * Updates provider information in protocol and config.
+   * Syncs instance ID and service name between protocol and config.
+   */
   private _updateProviderInfo() {
     // Synchronize provider's instance ID.
     const coreConfig = this.configManager.getCoreConfig();

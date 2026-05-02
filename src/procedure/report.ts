@@ -18,7 +18,7 @@ import {
 } from "../types/basal-protocol";
 
 /**
- * Manager info interface containing report API spec.
+ * Interface containing the ServiceManager's API specifications for reporting.
  */
 export interface ReportManagerInfo {
   apis: {
@@ -62,14 +62,13 @@ export class ReportProcedure extends Procedure {
   /**
    * Reports current runtime metrics to the ServiceManager.
    *
-   * @param taskManager - Name of the manager task
    * @param context - Execution context with dependencies
-   * @returns Promise resolving when report is sent or max retries reached
+   * @returns Promise resolving true when report is sent or conditional rejection, false for max retries reached.
    */
-  public async execute(context?: ReportContext): Promise<void> {
+  public async execute(context?: ReportContext): Promise<boolean> {
     // Initiate variables.
     if (context) this.context = context;
-    if (!this.context) return;
+    if (!this.context) return true;
     const { taskName, tasks, manager, ask, buildMessage } = this
       .context as ReportContext;
 
@@ -77,7 +76,7 @@ export class ReportProcedure extends Procedure {
     const smTask = tasks.get(taskName);
     if (!(smTask instanceof TcpClient)) {
       this.logger.debug("No ServiceManager found for report.");
-      return;
+      return true;
     }
     this.logger.debug("Report current status to service manager ...");
 
@@ -112,7 +111,7 @@ export class ReportProcedure extends Procedure {
         await this.delay(retryDelay);
       }
     }
-    (this.context as ReportContext).result = success;
+    return success;
   }
 
   /**

@@ -206,6 +206,11 @@ export class ConfigManager<
     return this.getConfig().app;
   }
 
+  /**
+   * Gets the current application environment (development, production, etc.).
+   *
+   * @returns {AppEnv} The current application environment.
+   */
   public getAppEnv(): AppEnv {
     return getAppEnv();
   }

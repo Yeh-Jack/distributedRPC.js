@@ -66,7 +66,9 @@ export class ServiceManager extends ServiceProvider {
     SpecServiceManager260321;
   protected override configManager: ServiceManagerConfig;
 
+  /** Registered service providers indexed by service name and instance ID. */
   private _services: Map<string, any> = new Map();
+  /** Reports received from service providers, indexed by service name and instance ID. */
   private _reports: Map<string, Map<string, ReportData[]>> = new Map();
 
   // Resources should be released during shutdown.
@@ -92,6 +94,12 @@ export class ServiceManager extends ServiceProvider {
     this.configManager = new ServiceManagerConfig(serviceName);
   }
 
+  /**
+   * Retrieves provider connection information for a peer.
+   *
+   * @param data - The API call containing peer information
+   * @returns Provider connection info if the peer is registered, undefined otherwise
+   */
   protected override async askProviderInfo(
     data: ApiCall,
   ): Promise<ProviderConnectInfo | undefined> {
@@ -114,6 +122,12 @@ export class ServiceManager extends ServiceProvider {
     }
   }
 
+  /**
+   * Retrieves registration info for a peer.
+   *
+   * @param peer - The peer identity to look up
+   * @returns RegisterInfo if found, undefined otherwise
+   */
   protected getRegisterInfo(peer: PeerIdentity): RegisterInfo | undefined {
     const svcGroup = this._services.get(peer.service);
     if (!svcGroup) return;
@@ -232,6 +246,11 @@ export class ServiceManager extends ServiceProvider {
     return instanceReports[instanceReports.length - 1];
   }
 
+  /**
+   * Handles service provider registration requests.
+   *
+   * @param data - The API call containing registration information
+   */
   protected async registrar(data: ApiCall): Promise<void> {
     const from = this.getPeerId(data);
     this._putProvider(data);
@@ -242,11 +261,22 @@ export class ServiceManager extends ServiceProvider {
   // Methods forced to be implemented on subclass.
   // --------------------------------------------
 
+  /**
+   * Builds the access point information for the service manager.
+   * Adds the "register" and "report" API endpoints to the access point.
+   *
+   * @param baseInfo - Base access point information
+   * @returns Modified access point with API capabilities
+   */
   protected buildAccessPointInfo(baseInfo: AccessPoint): AccessPoint {
     baseInfo.api = ["register", "report"];
     return baseInfo;
   }
 
+  /**
+   * Initializes the API function map with ServiceManager-specific handlers.
+   * Overrides the parent implementation to register "register" and "report" handlers.
+   */
   protected override initializeApiFunctionMap(): void {
     super.initializeApiFunctionMap();
     // Replace the standard function with the functions of the ServiceManager.
@@ -254,14 +284,24 @@ export class ServiceManager extends ServiceProvider {
     this.apis.report = this.gotReport;
   }
 
+  /**
+   * No-op implementation - ServiceManager does not require additional resource initialization.
+   */
   protected override async initializingResources(): Promise<void> {
     return;
   }
 
+  /**
+   * No-op implementation - ServiceManager does not require additional resource cleanup.
+   */
   protected override async releasingResources(): Promise<void> {
     return;
   }
 
+  /**
+   * Disables service manager discovery when reloading configuration.
+   * Sets discovery mode to None to prevent redundant discovery operations.
+   */
   protected override async reloading(): Promise<void> {
     // Disable service manager discovery task.
     const netConfig = this.configManager.getCoreConfig().net;
@@ -271,11 +311,17 @@ export class ServiceManager extends ServiceProvider {
     );
   }
 
+  /**
+   * Starts the ServiceManager by enabling the API channel and initializing broadcast listener.
+   */
   protected override async starting(): Promise<void> {
     await this.setApiChannel(true);
     await this._initializeBroadcastListener("reception");
   }
 
+  /**
+   * Stops the ServiceManager by disabling the API channel.
+   */
   protected override async stopping(): Promise<void> {
     await this.setApiChannel(false);
   }
@@ -325,6 +371,11 @@ export class ServiceManager extends ServiceProvider {
     }
   }
 
+  /**
+   * Stores provider registration information in the services registry.
+   *
+   * @param data - The API call containing registration info
+   */
   private _putProvider(data: ApiCall): void {
     const args = data.args;
     const { name: svcName, id: svcId } = args.provider;

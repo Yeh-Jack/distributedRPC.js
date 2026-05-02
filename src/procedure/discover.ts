@@ -40,7 +40,7 @@ export class DiscoverProcedure extends Procedure {
    * Discovers the ServiceManager.
    *
    * @param context - Execution context
-   * @returns Promise resolving to discovery result
+   * @returns Promise resolving to ManagerInfo containing manager info and TcpClient instance, or empty result if not found
    */
   public override async execute(
     context?: ProcedureContext,

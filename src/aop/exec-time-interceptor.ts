@@ -9,6 +9,7 @@ import { Logger } from "winston";
 
 import { executionTime } from "../metrics/otel-metrics";
 import { ExecutionMetrics } from "../metrics/exec-metrics";
+import { deprecate } from "util";
 
 const isAsyncFunction = (fn: any): boolean => {
   return (
@@ -19,6 +20,7 @@ const isAsyncFunction = (fn: any): boolean => {
 };
 
 /**
+ * @deprecated
  * Measures method execution time and records metrics.
  *
  * @param className - Name of the class containing the method.
@@ -46,11 +48,6 @@ function recordExecutionMetrics(
 
   // Record custom execution metrics
   metrics.recordExecutionTime(className, methodName, duration, success);
-
-  // Log the result for debugging (if needed)
-  if (result !== undefined) {
-    // Could add additional logging here if needed
-  }
 }
 
 /**
@@ -86,6 +83,16 @@ export function instrumentService<T extends object>(
   return instance;
 }
 
+/**
+ * @deprecated
+ * Wraps a service instance with a Proxy to track method execution time.
+ * Intercepts all method calls and records duration metrics using ExecutionMetrics.
+ * Supports both sync and async methods.
+ *
+ * @param instance - The service instance to wrap with execution time tracking.
+ * @param metrics - ExecutionMetrics instance for recording timing data.
+ * @returns A proxied instance that tracks execution time for all method calls.
+ */
 export function withExecutionTime<T extends object>(
   instance: T,
   metrics: ExecutionMetrics,

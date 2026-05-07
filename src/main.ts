@@ -6,9 +6,9 @@
 import "reflect-metadata";
 
 import { container, createProvider } from "./aop/container";
+import { ConfigManager } from "./common/config";
 import { ServiceManager } from "./manager/service-manager";
 import { ServiceProvider } from "./provider/service-provider";
-import { ConfigManager } from "./common/config";
 
 const INTERRUPT_KEY = "<Ctrl+C>";
 
@@ -22,7 +22,7 @@ const INTERRUPT_KEY = "<Ctrl+C>";
 function handleInterruption(providers: ServiceProvider[], logger: any) {
   const stopAll = async () => {
     const promises = providers.map((provider) => {
-      return provider.shutdown();
+      return provider.lifeCycle("shutdown");
     });
 
     await Promise.all(promises);
@@ -93,8 +93,11 @@ async function main(): Promise<void> {
 
   try {
     const startTime = process.hrtime.bigint();
-    await Promise.all([manager.start(), provider.start()]);
-    await provider.register();
+    await Promise.all([
+      manager.lifeCycle("start"),
+      provider.lifeCycle("start"),
+    ]);
+    await provider.lifeCycle("register");
     const elapsedNs = process.hrtime.bigint() - startTime;
     const elapsedMs = Number(elapsedNs) / 1_000_000;
     logger.info(

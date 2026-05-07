@@ -243,9 +243,10 @@ class ReportProcedure extends Procedure { /* ... */ }
 Named tasks for different network resources:
 
 ```typescript
-const _TASK_CHANNEL_API = "_chnAPI";      // API requests
-const _TASK_CHANNEL_RESPONSE = "_chnResponse";  // Responses
-const _TASK_MANAGER = "_svcManager";       // ServiceManager connection
+// Task channels (from ProviderTask enum)
+ProviderTask.ChannelApi      // API requests
+ProviderTask.ChannelResponse  // Responses
+ProviderTask.Manager        // ServiceManager connection
 ```
 
 ### 3. Provider State Pattern

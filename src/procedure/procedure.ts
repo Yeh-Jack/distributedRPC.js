@@ -83,7 +83,7 @@ export abstract class Procedure {
    * @param ap - AccessPoint containing address and port of the remote endpoint.
    * @returns Promise that resolves to the initialized TcpClient.
    */
-  protected async initializeTcpClient(
+  protected async getTcpClient(
     name: string,
     ap?: AccessPoint,
   ): Promise<TcpClient> {
@@ -120,7 +120,7 @@ export abstract class Procedure {
    * @param name - Unique name for this listener.
    * @returns Promise that resolves when the listener is started.
    */
-  protected async initializeTcpServer(name: string): Promise<TcpServer> {
+  protected async getTcpServer(name: string): Promise<TcpServer> {
     try {
       const { tasks } = this.context;
       let tcpServer: TcpServer = tasks.get(name);

@@ -120,7 +120,7 @@ export async function createProvider<T extends ServiceProvider>(
     .bind<T>(serviceClass)
     .to(serviceClass)
     .onActivation(async (_ctx, _instance) => {
-      await _instance.reload();
+      await _instance.lifeCycle("reload");
       const metrics = new ExecutionMetrics(_instance.getLogger());
       return instrumentService(_instance, metrics);
     });

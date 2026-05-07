@@ -385,8 +385,8 @@ constructor(configManager: ConfigManager)
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `delay(ms: number)` | `Promise<void>` | Utility delay |
-| `initializeTcpClient(name: string, ap?: AccessPoint)` | `Promise<TcpClient>` | Create TCP client |
-| `initializeTcpServer(name: string)` | `Promise<TcpServer>` | Create TCP server |
+| `getTcpClient(name: string, ap?: AccessPoint)` | `Promise<TcpClient>` | Create TCP client |
+| `getTcpServer(name: string)` | `Promise<TcpServer>` | Create TCP server |
 
 ---
 

@@ -4,12 +4,10 @@ import { inject, injectable } from "inversify";
 import { TYPES } from "../aop/di-types";
 import { createNamedUdpServer } from "../aop/container";
 import { BroadcastUdpServer } from "../network/broadcast-udp-server";
-import { NetworkPeer } from "../network/network-events";
 import { TcpServer } from "../network/tcp-server";
-import { ServiceProvider } from "../provider/service-provider";
+import { ProviderTask, ServiceProvider } from "../provider/service-provider";
 import {
   AccessPoint,
-  AckType,
   ApiCall,
   BasalProtocol,
   IdGenerator,
@@ -17,7 +15,6 @@ import {
   ProviderConnectInfo,
   RegisterInfo,
   ReportData,
-  ResponseArgs,
   ServiceManagerDiscovery,
   FOLLOW_UP,
 } from "../types/basal-protocol";
@@ -168,7 +165,7 @@ export class ServiceManager extends ServiceProvider {
    * @param name - The name of the TCP server to retrieve.
    * @returns The TcpServer instance or undefined if not found.
    */
-  public getTcpServer(name: string): TcpServer | undefined {
+  public getTcpServerTask(name: string): TcpServer | undefined {
     return this.tasks.get(name) as TcpServer;
   }
 
@@ -178,7 +175,7 @@ export class ServiceManager extends ServiceProvider {
    * @param name - The name of the UDP server to retrieve.
    * @returns The BroadcastUdpServer instance or undefined if not found.
    */
-  public getUdpServer(name: string): BroadcastUdpServer | undefined {
+  public getUdpServerTask(name: string): BroadcastUdpServer | undefined {
     return this.tasks.get(name) as BroadcastUdpServer | undefined;
   }
 
@@ -338,7 +335,7 @@ export class ServiceManager extends ServiceProvider {
   private async _initializeBroadcastListener(name: string): Promise<void> {
     try {
       // Prepare the ServiceManager information.
-      const ap: AccessPoint = this.getTcpTaskInfo(this._TASK_CHANNEL_API);
+      const ap: AccessPoint = this.getTcpTaskInfo(ProviderTask.ChannelApi);
       const appConfig = this.configManager.getAppConfig();
       const response: BroadcastResponse260321 = {
         manager: {

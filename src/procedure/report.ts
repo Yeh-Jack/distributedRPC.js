@@ -31,7 +31,7 @@ export interface ReportManagerInfo {
  */
 export interface ReportContext extends ProcedureContext {
   apiCounter: Map<string, Omit<ApiCounter, "total">>;
-  manager: { manager: ReportManagerInfo };
+  manager: ReportManagerInfo;
 
   ask: (
     helper: TcpClient,
@@ -80,7 +80,7 @@ export class ReportProcedure extends Procedure {
     }
     this.logger.debug("Report current status to service manager ...");
 
-    const ackType = manager.manager.apis.report.ack;
+    const ackType = manager.apis.report.ack;
     const reportData = this._collectReportData();
     const apiData: ApiCall = buildMessage("report", reportData);
 

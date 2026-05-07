@@ -29,6 +29,7 @@ export interface RegisterManagerInfo {
  * Context required for the register procedure execution.
  */
 export interface RegisterContext extends ProcedureContext {
+  // Holds discovered ServiceManager instance and it's information.
   manager: { manager: RegisterManagerInfo };
   protocol: BasalProtocol;
   smTaskName: string;
@@ -73,12 +74,12 @@ export class RegisterProcedure extends Procedure {
     if (context) this.context = context;
     if (!this.context) return false;
     const {
-      taskName,
+      taskName, // Response channel task name.
       tasks,
 
-      manager,
+      manager, // Holds discovered ServiceManager instance and it's information.
       protocol,
-      smTaskName,
+      smTaskName, // ServiceManager task name.
 
       ask,
       buildMessage,

@@ -13,9 +13,9 @@ export const EVENT_MGR_RESPONSE = "mgr_response";
  * Result of the ServiceManager discovery procedure.
  */
 export interface ManagerInfo {
-  managerInfo: BroadcastResponse260321[];
-  manager: any;
-  instance: TcpClient | null;
+  managerInfo?: BroadcastResponse260321[];
+  manager?: BroadcastResponse260321;
+  instance?: TcpClient;
 }
 
 /**
@@ -46,11 +46,7 @@ export class DiscoverProcedure extends Procedure {
     context?: ProcedureContext,
   ): Promise<ManagerInfo> {
     // Initiate variables.
-    const SM_NOT_FOUND = {
-      managerInfo: [],
-      manager: {},
-      instance: null,
-    };
+    const SM_NOT_FOUND: ManagerInfo = {};
     if (context) this.context = context;
     if (!this.context) return SM_NOT_FOUND;
     const { taskName } = this.context;
@@ -76,18 +72,17 @@ export class DiscoverProcedure extends Procedure {
     }
 
     // Connect to ServiceManager if discovered
-    const manager = { ...managerInfo[0] };
+    const manager: BroadcastResponse260321 = { ...managerInfo[0] };
     const mgrInfo: ManagerInfo = {
       managerInfo,
       manager,
-      instance: null,
     };
     if (managerInfo.length > 0 && manager?.manager?.provider) {
-      const ap: AccessPoint = mgrInfo.manager?.manager?.provider;
+      const ap: AccessPoint = mgrInfo.manager!.manager.provider;
 
       // This channel is used for sending request to ServiceManager only without receiving response.
       // There is a dedicated response channel for receiving responses of all requests.
-      const smTask: TcpClient = await this.initializeTcpClient(taskName, ap);
+      const smTask: TcpClient = await this.getTcpClient(taskName, ap);
       if (smTask) {
         mgrInfo.instance = smTask;
         this.logger.debug("Request channel to ServiceManager is established.");

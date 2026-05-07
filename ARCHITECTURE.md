@@ -237,10 +237,10 @@ ExecutionState enum:
 Services maintain a `tasks: Map<string, any>` for managing network resources:
 
 ```typescript
-// Task channels
-const _TASK_CHANNEL_API = "_chnAPI";    // Accept API requests
-const _TASK_CHANNEL_RESPONSE = "_chnResponse";  // Send responses
-const _TASK_MANAGER = "_svcManager";    // Connection to ServiceManager
+// Task channels (from ProviderTask enum)
+ProviderTask.ChannelApi    // Accept API requests
+ProviderTask.ChannelResponse  // Send responses
+ProviderTask.Manager       // Connection to ServiceManager
 ```
 
 ## Message Protocol

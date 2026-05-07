@@ -82,7 +82,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   private _server: Server | undefined = undefined;
 
   private _address!: string;
-  private _port!: number;
+  private _port: number = 0; // 0 means not initialized yet.
 
   private _sockets: Set<TcpSocket> = new Set();
   private _txBytes: number = 0; // Track transmitted bytes
@@ -213,7 +213,14 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     this.logger = this.configManager.getLogger(); // Reload the logger.
     this._abortController = new AbortController();
     this._address = tcpConfig.address;
-    this._port = tcpConfig.port; // Default to 0.
+
+    /*
+     * Use configured port only when initializing.
+     * Otherwise, use the port previously occupied to keep serving on the same port.
+     */
+    if (this._port === 0) {
+      this._port = tcpConfig.port; // Default to 0.
+    }
 
     this._setState(ExecutionState.Starting);
     this.logger.debug(

@@ -17,9 +17,11 @@ import {
   ServiceProvider,
 } from "../provider/service-provider";
 import {
+  AckType,
   AckValue,
   ApiCall,
   ApiSpec,
+  BasalProtocol,
   ExecutionState,
   FOLLOW_UP,
   ResponseArgs,
@@ -29,6 +31,16 @@ import {
 export interface LifeCycleContext extends ProcedureContext {
   eventEmitter: TypedEventEmitter<ServiceEventMap>;
   operation: LifeCycleOperation;
+
+  // Methods binding from the parent instance.
+  ask: (
+    helper: TcpClient,
+    message: ApiCall,
+    ackType: AckType,
+  ) => Promise<{ msgId: string; promise?: Promise<any> }>;
+  buildMessage: (apiPath: string, args?: any, msgId?: string) => ApiCall;
+  getIdentity: (provider?: BasalProtocol, arrowed?: boolean) => string;
+  setState: (state: ExecutionState) => void;
 }
 
 export type LifeCycleOperation =
@@ -97,18 +109,17 @@ export class LifeCycleProcedure extends Procedure {
     if (!(this._parent && acceptStates.includes(this._parent.getState())))
       return false;
 
-    this.logger.info(
-      `Activating the ${this._parent.getIdentity()} service ...`,
-    );
-    this._parent["setState"](ExecutionState.Starting);
+    const { getIdentity, setState, tasks } = this.context as LifeCycleContext;
+    this.logger.info(`Activating the ${getIdentity()} service ...`);
+    setState(ExecutionState.Starting);
 
-    const { tasks } = this.context as LifeCycleContext;
     const task: TcpServer = tasks.get(ProviderTask.ChannelApi);
     task.start();
 
-    this.logger.info(`${this._parent.getIdentity()} is activated.`);
-    this._parent["setState"](ExecutionState.Running);
+    this.logger.info(`${getIdentity()} is activated.`);
+    setState(ExecutionState.Running);
     await this._report();
+    this._events.emit(ServiceEvent.ServiceStarted, this._parent);
     return true;
   }
 
@@ -121,16 +132,17 @@ export class LifeCycleProcedure extends Procedure {
     if (!(this._parent && acceptStates.includes(this._parent.getState())))
       return false;
 
-    this.logger.info(`Halting the ${this._parent.getIdentity()} service ...`);
-    this._parent["setState"](ExecutionState.Halting);
+    const { getIdentity, setState, tasks } = this.context as LifeCycleContext;
+    this.logger.info(`Halting the ${getIdentity()} service ...`);
+    setState(ExecutionState.Halting);
 
-    const { tasks } = this.context as LifeCycleContext;
     const task: TcpServer = tasks.get(ProviderTask.ChannelApi);
     task.stop();
 
-    this.logger.info(`${this._parent.getIdentity()} is halted.`);
-    this._parent["setState"](ExecutionState.Halt);
+    this.logger.info(`${getIdentity()} is halted.`);
+    setState(ExecutionState.Halt);
     await this._report();
+    this._events.emit(ServiceEvent.ServiceHalted, this._parent);
     return true;
   }
 
@@ -151,7 +163,8 @@ export class LifeCycleProcedure extends Procedure {
     this._procedure.register = procedure;
 
     // Context for execute the procedure.
-    const { idGenerator, tasks } = this.context as LifeCycleContext;
+    const { ask, buildMessage, idGenerator, tasks } = this
+      .context as LifeCycleContext;
     const context: RegisterContext = {
       // parent: this,
       taskName: ProviderTask.ChannelResponse,
@@ -162,8 +175,8 @@ export class LifeCycleProcedure extends Procedure {
       protocol: this._parent["PROTOCOL"],
       smTaskName: ProviderTask.Manager,
 
-      ask: this._parent["ask"].bind(this._parent),
-      buildMessage: this._parent["buildMessage"].bind(this._parent),
+      ask: ask.bind(this._parent),
+      buildMessage: buildMessage.bind(this._parent),
       getTcpTaskInfo: this._parent["getTcpTaskInfo"].bind(this._parent),
     };
 
@@ -211,7 +224,8 @@ export class LifeCycleProcedure extends Procedure {
     }
 
     // Context for execute the procedure.
-    const { idGenerator, tasks } = this.context as LifeCycleContext;
+    const { ask, buildMessage, idGenerator, tasks } = this
+      .context as LifeCycleContext;
     const context: ReportContext = {
       parent: this._parent,
       taskName: ProviderTask.Manager,
@@ -221,16 +235,18 @@ export class LifeCycleProcedure extends Procedure {
       apiCounter: this._parent["_apiCounter"],
       manager: this._manager.manager?.manager!,
 
-      ask: this._parent["ask"].bind(this._parent),
-      buildMessage: this._parent["buildMessage"].bind(this._parent),
+      ask: ask.bind(this._parent),
+      buildMessage: buildMessage.bind(this._parent),
     };
 
     const success = await procedure.execute(context);
     if (!success) {
-      // Failed to report to ServiceManager meaning lost connection to it.
-      // Thus, discover ServiceManager instances again.
-      this._events.emit(ServiceEvent.ManagerDisconnect, this._parent);
-      await this._discoverServiceManager();
+      // Failed to report to ServiceManager meaning network error on it.
+      this._handleTcpMgrError({
+        err: Object.assign(new Error("Report retry exhausted."), {
+          code: "ETIMEDOUT",
+        }),
+      });
     }
     return success;
   }
@@ -261,7 +277,10 @@ export class LifeCycleProcedure extends Procedure {
     await this._stopReportSchedule();
     await this._stopManagerTask();
     await this._releaseResources();
-    this.logger.info(`${this._parent.getIdentity()} shutdown complete.`);
+
+    const { getIdentity } = this.context as LifeCycleContext;
+    this.logger.info(`${getIdentity()} shutdown complete.`);
+    this._events.emit(ServiceEvent.ServiceShutdown, this._parent);
     return true;
   }
 
@@ -280,20 +299,22 @@ export class LifeCycleProcedure extends Procedure {
     if (!(this._parent && acceptStates.includes(this._parent.getState())))
       return false;
 
+    const { getIdentity, setState } = this.context as LifeCycleContext;
     if (!this._parent["_initialized"]) {
       await this._parent["_initializeResources"]();
       await this._setSystemChannel(true);
     }
     await this._discoverServiceManager();
-    this._parent["setState"](ExecutionState.Starting);
+    setState(ExecutionState.Starting);
 
     this.logger.debug(`Starting the service in subclass ...`);
     await this._parent["starting"]();
     this.logger.debug(`${FOLLOW_UP}Service started in subclass.`);
 
     await this._startReportSchedule();
-    this.logger.info(`${this._parent.getIdentity()} started successfully.`);
-    this._parent["setState"](ExecutionState.Running);
+    this.logger.info(`${getIdentity()} started successfully.`);
+    setState(ExecutionState.Running);
+    this._events.emit(ServiceEvent.ServiceStarted, this._parent);
     return true;
   }
 
@@ -308,14 +329,14 @@ export class LifeCycleProcedure extends Procedure {
     if (!(this._parent && acceptStates.includes(this._parent.getState())))
       return false;
 
-    this.logger.info(`Stopping the ${this._parent.getIdentity()} service ...`);
-    this._parent["setState"](ExecutionState.Stopping);
+    const { getIdentity, setState, tasks } = this.context as LifeCycleContext;
+    this.logger.info(`Stopping the ${getIdentity()} service ...`);
+    setState(ExecutionState.Stopping);
 
     this.logger.debug(`Stopping the service in subclass ...`);
     await this._parent["stopping"]();
     this.logger.debug(`${FOLLOW_UP}Service stopped in subclass.`);
 
-    const { tasks } = this.context as LifeCycleContext;
     const wait: Promise<void>[] = [];
     for (const name of tasks.keys()) {
       // Leave the ServiceManager task running.
@@ -326,9 +347,10 @@ export class LifeCycleProcedure extends Procedure {
     }
     await Promise.all(wait);
 
-    this.logger.info(`${this._parent.getIdentity()} stopped.`);
-    this._parent["setState"](ExecutionState.Stopped);
+    this.logger.info(`${getIdentity()} stopped.`);
+    setState(ExecutionState.Stopped);
     await this._report();
+    this._events.emit(ServiceEvent.ServiceStopped, this._parent);
     return true;
   }
 
@@ -383,6 +405,7 @@ export class LifeCycleProcedure extends Procedure {
           instance: result.instance,
         });
         tasks.set(ProviderTask.Manager, result.instance);
+        await this._setManagerChannel(true);
         this._events.emit(ServiceEvent.ManagerConnected, this._parent);
         delete this._procedure.discovery;
         break;
@@ -407,6 +430,30 @@ export class LifeCycleProcedure extends Procedure {
     }
     return await instFunc.call(this);
   }
+
+  /**
+   * Handle network error situations from the ServiceManager channel.
+   * After that, emits a `ServiceEvent.ManagerDisconnect` event from the ServiceProvider
+   * instance to notify the service manager channel is broken.
+   *
+   * @param param0
+   */
+  private _handleTcpMgrError = async ({
+    err,
+    peer,
+  }: {
+    err: NodeJS.ErrnoException;
+    peer?: NetworkPeer;
+  }): Promise<void> => {
+    // Unsubscribe to the event.
+    await this._setManagerChannel(false);
+
+    // Emits a ServiceEvent.ManagerDisconnect event to notify the service manager channel is broken.
+    this._events.emit(ServiceEvent.ManagerDisconnect, this._parent);
+
+    // Discover ServiceManager instances again.
+    await this._discoverServiceManager();
+  };
 
   /**
    * Handles incoming system instruction from TCP channel.
@@ -455,7 +502,7 @@ export class LifeCycleProcedure extends Procedure {
         json?.api,
       );
     } finally {
-      this._parent["_updateApiCouynter"](errType, json);
+      this._parent["_updateApiCounter"](errType, json);
       if (result.length > 1) {
         const respArgs: ResponseArgs = {
           apiSpec: apiSpec,
@@ -476,7 +523,8 @@ export class LifeCycleProcedure extends Procedure {
    * Calls subclass releasingResources hook.
    */
   private async _releaseResources(): Promise<void> {
-    this.logger.debug(`Cleanup ${this._parent.getIdentity()} ...`);
+    const { getIdentity } = this.context as LifeCycleContext;
+    this.logger.debug(`Cleanup ${getIdentity()} ...`);
 
     this.logger.debug(`Releasing resources allocated in subclass ...`);
     await this._parent["releasingResources"](); // Release resources on subclass.
@@ -488,7 +536,22 @@ export class LifeCycleProcedure extends Procedure {
     await Promise.all(release);
 
     this._parent["_initialized"] = false;
-    this.logger.debug(`${this._parent.getIdentity()} released.`);
+    this.logger.debug(`${getIdentity()} released.`);
+  }
+
+  /**
+   * Sets up the service manager channel error monitor event handler.
+   *
+   * @param subscribe - Whether to subscribe to error events
+   * @returns The service manager channel TCP client
+   */
+  private async _setManagerChannel(subscribe: boolean): Promise<TcpClient> {
+    const { tasks } = this.context as LifeCycleContext;
+    const task: TcpClient = tasks.get(ProviderTask.Manager);
+
+    if (subscribe) task.once(NetworkEvent.Error, this._handleTcpMgrError);
+    else task.off(NetworkEvent.Error, this._handleTcpMgrError);
+    return task;
   }
 
   /**
@@ -502,6 +565,7 @@ export class LifeCycleProcedure extends Procedure {
     const task: TcpServer = await this._parent["getTcpServer"](
       ProviderTask.ChannelSys,
     );
+
     if (subscribe) task.on(NetworkEvent.Data, this._handleTcpSysRequest);
     else task.off(NetworkEvent.Data, this._handleTcpSysRequest);
     return task;
@@ -547,6 +611,7 @@ export class LifeCycleProcedure extends Procedure {
   private async _stopManagerTask(): Promise<void> {
     const { tasks } = this.context as LifeCycleContext;
     if (tasks.has(ProviderTask.Manager)) {
+      await this._setManagerChannel(false);
       await this._stopTask(ProviderTask.Manager);
     }
   }

@@ -314,18 +314,6 @@ describe("ServiceProvider Integration with Real ServiceManager", () => {
       const protocol = await serviceProvider.getProtocol();
       expect(typeof protocol).toBe("string");
     });
-
-    it("should collect provider info", () => {
-      serviceProvider = new TestServiceProvider({
-        udpPort: assignedUdpPort,
-        tcpPort: assignedTcpPort,
-        smDiscovery: "None",
-      });
-
-      const info = (serviceProvider as any).collectProviderInfo();
-      expect(info).toBeDefined();
-      expect(info.enabled).toBe(true);
-    });
   });
 
   describe("ServiceProvider report handling via ServiceManager", () => {
@@ -448,34 +436,6 @@ describe("ServiceProvider Integration with Real ServiceManager", () => {
     });
   });
 
-  describe("ServiceManager getTcpServer and getUdpServer", () => {
-    it("should return undefined for non-existent TCP server", () => {
-      const smConfig = createServiceManagerConfig({
-        udpPort: assignedUdpPort,
-        tcpPort: assignedTcpPort,
-        smDiscovery: "None",
-      });
-      serviceManager = new ServiceManager(mockIdGenerator);
-      (serviceManager as any)._setConfigManager(smConfig);
-
-      const tcpServer = serviceManager.getTcpServer("non-existent");
-      expect(tcpServer).toBeUndefined();
-    });
-
-    it("should return undefined for non-existent UDP server", () => {
-      const smConfig = createServiceManagerConfig({
-        udpPort: assignedUdpPort,
-        tcpPort: assignedTcpPort,
-        smDiscovery: "None",
-      });
-      serviceManager = new ServiceManager(mockIdGenerator);
-      (serviceManager as any)._setConfigManager(smConfig);
-
-      const udpServer = serviceManager.getUdpServer("non-existent");
-      expect(udpServer).toBeUndefined();
-    });
-  });
-
   describe("ServiceProvider buildAccessPointInfo", () => {
     it("should build access point info with authorization and function", () => {
       serviceProvider = new TestServiceProvider({
@@ -495,21 +455,6 @@ describe("ServiceProvider Integration with Real ServiceManager", () => {
       const result = (serviceProvider as any).buildAccessPointInfo(baseInfo);
       expect(result.authorization).toBe("test-auth");
       expect(result.function).toContain("testFunction");
-    });
-  });
-
-  describe("ServiceManager reloading", () => {
-    it("should reload configuration", async () => {
-      const smConfig = createServiceManagerConfig({
-        udpPort: assignedUdpPort,
-        tcpPort: assignedTcpPort,
-        smDiscovery: "None",
-      });
-      serviceManager = new ServiceManager(mockIdGenerator);
-      (serviceManager as any)._setConfigManager(smConfig);
-
-      await serviceManager.reload();
-      expect(serviceManager.getState()).toBeDefined();
     });
   });
 });

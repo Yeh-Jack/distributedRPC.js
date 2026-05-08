@@ -172,41 +172,7 @@ describe("ServiceManager", () => {
     });
   });
 
-  describe("getTcpServer", () => {
-    it("should return undefined when no TCP server is registered", () => {
-      const tcpServer = serviceManager.getTcpServer("register");
-      expect(tcpServer).toBeUndefined();
-    });
-
-    it("should return undefined for non-existent server", () => {
-      const tcpServer = serviceManager.getTcpServer("non-existent");
-      expect(tcpServer).toBeUndefined();
-    });
-
-    it("should return TCP server when registered", () => {
-      const mockTcp = createMockTcpServer("test-server");
-      (serviceManager as any).tasks.set("test-server", mockTcp);
-      expect(serviceManager.getTcpServer("test-server")).toBe(mockTcp);
-    });
-  });
-
-  describe("getUdpServer", () => {
-    it("should return undefined when no UDP server is registered", () => {
-      const udpServer = serviceManager.getUdpServer("reception");
-      expect(udpServer).toBeUndefined();
-    });
-
-    it("should return undefined for non-existent server", () => {
-      const udpServer = serviceManager.getUdpServer("non-existent");
-      expect(udpServer).toBeUndefined();
-    });
-
-    it("should return UDP server when registered", () => {
-      const mockUdp = createMockUdpServer("test-server");
-      (serviceManager as any).tasks.set("test-server", mockUdp);
-      expect(serviceManager.getUdpServer("test-server")).toBe(mockUdp);
-    });
-  });
+  
 
   describe("clearReports", () => {
     it("should do nothing when service has no reports", () => {
@@ -444,16 +410,7 @@ describe("ServiceManager", () => {
     });
   });
 
-  describe("stop with services", () => {
-    it("should handle services without stop method", async () => {
-      const serviceWithoutStop = {
-        name: "no-stop",
-      };
-
-      (serviceManager as any).tasks.set("no-stop", serviceWithoutStop);
-      await serviceManager.stop();
-    });
-  });
+  
 
   describe("state management", () => {
     it("should report state via getState", () => {
@@ -461,19 +418,7 @@ describe("ServiceManager", () => {
     });
   });
 
-  describe("reload", () => {
-    it("should call configManager.reload", async () => {
-      await serviceManager.reload();
-      expect(mockConfigManager.reload).toHaveBeenCalled();
-    });
-  });
-
-  describe("full lifecycle", () => {
-    it("should complete full stop lifecycle", async () => {
-      await serviceManager.stop();
-      expect(serviceManager.getState()).toBeDefined();
-    });
-  });
+  
 
   describe("registrar", () => {
     it("should register a provider and log", async () => {

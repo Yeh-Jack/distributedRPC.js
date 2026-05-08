@@ -92,7 +92,7 @@ export class ServiceProvider {
   protected readonly PROTOCOL: BasalProtocol;
 
   // EventEmitter component.
-  protected readonly _events = new TypedEventEmitter<ServiceEventMap>();
+  protected readonly events = new TypedEventEmitter<ServiceEventMap>();
 
   protected configManager: ConfigManager;
   protected logger!: ReturnType<LoggerManager["getLogger"]>;
@@ -125,6 +125,7 @@ export class ServiceProvider {
   // Procedure instances.
   private _procedure: any = {};
 
+  // States of this instance.
   private _initialized: boolean = false;
   private _providerState!: ProviderState;
 
@@ -169,7 +170,7 @@ export class ServiceProvider {
    * @returns event emitter of this instance.
    */
   public getEventEmitter(): TypedEventEmitter<ServiceEventMap> {
-    return this._events;
+    return this.events;
   }
 
   /**
@@ -245,8 +246,13 @@ export class ServiceProvider {
       taskName: ProviderTask.Manager,
       tasks: this.tasks,
       idGenerator: this.idGenerator,
-      eventEmitter: this._events,
+      eventEmitter: this.events,
       operation: op,
+
+      ask: this.ask.bind(this),
+      buildMessage: this.buildMessage.bind(this),
+      getIdentity: this.getIdentity.bind(this),
+      setState: this.setState.bind(this),
     };
 
     return await procedure.execute(context);
@@ -834,7 +840,7 @@ export class ServiceProvider {
     } catch (err) {
       errType = this._handleRequestError(err as Error, message, json?.api);
     } finally {
-      this._updateApiCouynter(errType, json);
+      this._updateApiCounter(errType, json);
       if (result.length > 1) {
         const respArgs: ResponseArgs = {
           apiSpec: apiSpec,
@@ -1166,7 +1172,7 @@ export class ServiceProvider {
    * @param errType - The type of error that occurred
    * @param json - The API call object
    */
-  private _updateApiCouynter(errType: AckValue, json: ApiCall) {
+  private _updateApiCounter(errType: AckValue, json: ApiCall) {
     // Update API counter statistics
     if (json?.api) {
       const apiPath = json.api;

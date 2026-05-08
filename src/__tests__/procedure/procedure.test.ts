@@ -135,7 +135,7 @@ describe("Procedure", () => {
     });
   });
 
-  describe("initializeTcpClient", () => {
+  describe("getTcpClient", () => {
     it("should throw error when AccessPoint is missing", async () => {
       const procedure = new ConcreteProcedure(mockConfigManager);
       procedure.setConfigManager(mockConfigManager);
@@ -146,7 +146,7 @@ describe("Procedure", () => {
       };
 
       await expect(
-        (procedure as any).initializeTcpClient("test-task", undefined),
+        (procedure as any).getTcpClient("test-task", undefined),
       ).rejects.toThrow("Missing AccessPoint argument.");
     });
 
@@ -168,7 +168,7 @@ describe("Procedure", () => {
       };
 
       await expect(
-        (procedure as any).initializeTcpClient("test-task", accessPoint),
+        (procedure as any).getTcpClient("test-task", accessPoint),
       ).rejects.toThrow("Missing IdGenerator argument.");
     });
 
@@ -190,7 +190,7 @@ describe("Procedure", () => {
         api: [],
       };
 
-      const result = await (procedure as any).initializeTcpClient(
+      const result = await (procedure as any).getTcpClient(
         "test-task",
         accessPoint,
       );
@@ -198,7 +198,7 @@ describe("Procedure", () => {
     });
   });
 
-  describe("initializeTcpServer", () => {
+  describe("getTcpServer", () => {
     it("should return existing tcpServer from tasks if already created", async () => {
       const mockTcpServer = { start: vi.fn().mockResolvedValue(undefined) };
       const procedure = new ConcreteProcedure(mockConfigManager);
@@ -209,7 +209,7 @@ describe("Procedure", () => {
         idGenerator: { generate: () => "id", shortId: () => "short" },
       };
 
-      const result = await (procedure as any).initializeTcpServer("test-task");
+      const result = await (procedure as any).getTcpServer("test-task");
       expect(result).toBe(mockTcpServer);
     });
 
@@ -226,7 +226,7 @@ describe("Procedure", () => {
         idGenerator: { generate: () => "id", shortId: () => "short" },
       };
 
-      const result = await (procedure as any).initializeTcpServer("test-task");
+      const result = await (procedure as any).getTcpServer("test-task");
 
       expect(createNamedTcpServer).toHaveBeenCalledWith(
         mockConfigManager,
@@ -252,7 +252,7 @@ describe("Procedure", () => {
       };
 
       await expect(
-        (procedure as any).initializeTcpServer("test-task"),
+        (procedure as any).getTcpServer("test-task"),
       ).rejects.toThrow("Server creation failed");
     });
   });

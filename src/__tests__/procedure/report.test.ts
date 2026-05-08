@@ -99,10 +99,8 @@ describe("ReportProcedure", () => {
       ]),
       idGenerator: { generate: () => "uuid", shortId: () => "short-id" },
       manager: {
-        manager: {
-          apis: {
-            report: mockApiSpec,
-          },
+        apis: {
+          report: mockApiSpec,
         },
       },
       apiCounter: mockApiCounter,

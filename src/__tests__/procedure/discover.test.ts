@@ -87,36 +87,9 @@ describe("DiscoverProcedure", () => {
   });
 
   describe("execute", () => {
-    it("should return SM_NOT_FOUND when context is not provided", async () => {
+    it("should return empty ManagerInfo when context is not provided", async () => {
       const result = await discoverProcedure.execute();
-      expect(result).toEqual({
-        managerInfo: [],
-        manager: {},
-        instance: null,
-      });
-    });
-
-    it("should return SM_NOT_FOUND when discovery is disabled", async () => {
-      const { createServiceManagerDiscover } =
-        await import("../../aop/container");
-      vi.mocked(createServiceManagerDiscover).mockReturnValue(null);
-
-      const context = {
-        taskName: "test-task",
-        tasks: new Map(),
-        idGenerator: {
-          generate: vi.fn(),
-          shortId: vi.fn().mockReturnValue("test-id"),
-        },
-      };
-
-      const result = await discoverProcedure.execute(context);
-
-      expect(result).toEqual({
-        managerInfo: [],
-        manager: {},
-        instance: null,
-      });
+      expect(result).toEqual({});
     });
 
     it("should return SM_NOT_FOUND when no managers are discovered", async () => {
@@ -138,11 +111,7 @@ describe("DiscoverProcedure", () => {
 
       const result = await discoverProcedure.execute(context);
 
-      expect(result).toEqual({
-        managerInfo: [],
-        manager: {},
-        instance: null,
-      });
+      expect(result).toEqual({});
     });
 
     it("should discover ServiceManager and connect to it", async () => {
@@ -239,7 +208,7 @@ describe("DiscoverProcedure", () => {
 
       const result = await discoverProcedure.execute(context);
 
-      expect(result.instance).toBeNull();
+      expect(result.instance).toBeUndefined();
     });
   });
 });

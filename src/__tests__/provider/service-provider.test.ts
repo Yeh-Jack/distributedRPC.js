@@ -291,16 +291,6 @@ describe("ServiceProvider", () => {
     });
   });
 
-  describe("collectProviderInfo", () => {
-    it("should return provider info object", () => {
-      const info = serviceProvider.collectProviderInfo();
-      expect(info.enabled).toBe(true);
-      expect(info["service.name"]).toBe("TestServiceProvider");
-      expect(info["service.instance"]).toBe("short-id-5678");
-      expect(info["protocol.version"]).toBe("1.0.0");
-    });
-  });
-
   describe("buildMessage", () => {
     it("should build ApiCall with correct peer information", () => {
       const apiCall = serviceProvider.buildMessage(
@@ -314,24 +304,6 @@ describe("ServiceProvider", () => {
       expect(apiCall.api).toBe("testApi");
       expect(apiCall.args).toEqual({ arg: "value" });
       expect(apiCall.msgId).toBe("msg-1");
-    });
-  });
-
-  describe("initializeApiFunctionMap", () => {
-    it("should initialize api function map", () => {
-      serviceProvider.initializeApiFunctionMap();
-      const apis = (serviceProvider as any).apis;
-      expect(apis.activate).toBeDefined();
-      expect(apis.getProtocol).toBeDefined();
-      expect(apis.getState).toBeDefined();
-    });
-  });
-
-  describe("Symbol.dispose", () => {
-    it("should call shutdown", async () => {
-      const shutdownSpy = vi.spyOn(serviceProvider, "shutdown");
-      (serviceProvider as any)[Symbol.dispose]();
-      expect(shutdownSpy).toHaveBeenCalled();
     });
   });
 
@@ -371,15 +343,18 @@ describe("ServiceProvider", () => {
   });
 
   describe("getServiceManagerInfo", () => {
-    it("should return empty array when no manager info", () => {
+    it("should return empty object when no manager info", () => {
       const info = serviceProvider.getServiceManagerInfo();
-      expect(info).toEqual([]);
+      expect(info).toEqual({});
     });
 
-    it("should return manager info when set", () => {
-      (serviceProvider as any)._managerInfo = [{ manager: {} } as any];
+    it("should return manager info when set in lifeCycle", () => {
+      const mockLifeCycle = {
+        getServiceManager: vi.fn().mockReturnValue({ manager: { address: "127.0.0.1" } }),
+      };
+      vi.spyOn(serviceProvider as any, "_getLifeCycle").mockReturnValue(mockLifeCycle);
       const info = serviceProvider.getServiceManagerInfo();
-      expect(info).toHaveLength(1);
+      expect(info).toHaveProperty("manager");
     });
   });
 
@@ -423,212 +398,6 @@ describe("ServiceProvider", () => {
       expect(() => serviceProvider.getTask("non-existent")).toThrow(
         "The <non-existent> task doesn't exist.",
       );
-    });
-  });
-
-  describe("initializeTcpClient", () => {
-    it("should return existing tcp client if already initialized", async () => {
-      const existingClient = createMockTcpClient();
-      (serviceProvider as any).tasks.set("test-client", existingClient);
-
-      const result = await serviceProvider.initializeTcpClient("test-client", {
-        address: "127.0.0.1",
-        port: 8080,
-        protocol: "TCP" as any,
-        authorization: "",
-        api: [],
-      });
-
-      expect(result).toBe(existingClient);
-    });
-
-    it("should throw error when access point is missing", async () => {
-      await expect(
-        serviceProvider.initializeTcpClient("new-client" as any),
-      ).rejects.toThrow("Missing AccessPoint argument.");
-    });
-  });
-
-  describe("initializeTcpServer", () => {
-    it("should return existing tcp server if already initialized", async () => {
-      const existingServer = createMockTcpServer("existing-server");
-      (serviceProvider as any).tasks.set("existing-server", existingServer);
-
-      const result =
-        await serviceProvider.initializeTcpServer("existing-server");
-      expect(result).toBe(existingServer);
-    });
-  });
-
-  describe("setApiChannel", () => {
-    it("should initialize and return TCP server with subscription", async () => {
-      vi.spyOn(serviceProvider, "initializeTcpServer" as any).mockResolvedValue(
-        createMockTcpServer("_chnAPI"),
-      );
-
-      const result = await serviceProvider.setApiChannel(true);
-      expect(result).toBeDefined();
-    });
-
-    it("should unsubscribe when subscribe is false", async () => {
-      vi.spyOn(serviceProvider, "initializeTcpServer" as any).mockResolvedValue(
-        createMockTcpServer("_chnAPI"),
-      );
-
-      await serviceProvider.setApiChannel(false);
-    });
-  });
-
-  describe("setResponseChannel", () => {
-    it("should initialize and return TCP server with subscription", async () => {
-      vi.spyOn(serviceProvider, "initializeTcpServer" as any).mockResolvedValue(
-        createMockTcpServer("_chnResponse"),
-      );
-
-      const result = await serviceProvider.setResponseChannel(true);
-      expect(result).toBeDefined();
-    });
-  });
-
-  describe("report", () => {
-    it("should not send report when no manager task exists", async () => {
-      (serviceProvider as any).tasks.clear();
-      await serviceProvider.report();
-    });
-  });
-
-  describe("register", () => {
-    it("should return early if register procedure already running", async () => {
-      (serviceProvider as any)._procedure.register = true;
-      await serviceProvider.register();
-      (serviceProvider as any)._procedure.register = undefined;
-    });
-  });
-
-  describe("start", () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
-    });
-
-    it("should not start if already Running", async () => {
-      mockProviderState.getState.mockReturnValue(ExecutionState.Running);
-
-      await serviceProvider.start();
-    });
-
-    it("should not start if in Error state", async () => {
-      mockProviderState.getState.mockReturnValue(ExecutionState.Error);
-
-      await serviceProvider.start();
-    });
-  });
-
-  describe("stop", () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
-    });
-
-    it("should stop service successfully when in Running state", async () => {
-      mockProviderState.getState.mockReturnValue(ExecutionState.Running);
-
-      const mockTcpServer = createMockTcpServer("test-task");
-      (serviceProvider as any).tasks.set("test-task", mockTcpServer);
-
-      vi.spyOn(serviceProvider as any, "_stopTask").mockResolvedValue(
-        undefined,
-      );
-      vi.spyOn(serviceProvider as any, "_stopReportSchedule").mockResolvedValue(
-        undefined,
-      );
-      vi.spyOn(serviceProvider, "report").mockResolvedValue(undefined);
-
-      await serviceProvider.stop();
-
-      expect(mockProviderState.setState).toHaveBeenCalledWith(
-        ExecutionState.Stopping,
-      );
-      expect(mockProviderState.setState).toHaveBeenCalledWith(
-        ExecutionState.Stopped,
-      );
-    });
-
-    it("should not stop if not in Running state", async () => {
-      mockProviderState.getState.mockReturnValue(ExecutionState.Stopped);
-
-      await serviceProvider.stop();
-    });
-  });
-
-  describe("shutdown", () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
-    });
-
-    it("should shutdown successfully", async () => {
-      mockProviderState.getState.mockReturnValue(ExecutionState.Running);
-
-      const mockTcpServer = createMockTcpServer("test-task");
-      (serviceProvider as any).tasks.set("test-task", mockTcpServer);
-
-      vi.spyOn(serviceProvider, "stop").mockResolvedValue(undefined);
-      vi.spyOn(serviceProvider as any, "_stopReportSchedule").mockResolvedValue(
-        undefined,
-      );
-      vi.spyOn(serviceProvider as any, "_stopManagerTask").mockResolvedValue(
-        undefined,
-      );
-      vi.spyOn(serviceProvider as any, "_releaseResources").mockResolvedValue(
-        undefined,
-      );
-
-      await serviceProvider.shutdown();
-
-      expect(serviceProvider.stop).toHaveBeenCalled();
-      expect(serviceProvider["_stopReportSchedule"]).toHaveBeenCalled();
-      expect(serviceProvider["_stopManagerTask"]).toHaveBeenCalled();
-      expect(serviceProvider["_releaseResources"]).toHaveBeenCalled();
-    });
-  });
-
-  describe("restart", () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
-    });
-
-    it("should restart the service", async () => {
-      mockProviderState.getState.mockReturnValue(ExecutionState.Stopped);
-
-      vi.spyOn(serviceProvider, "stop").mockResolvedValue(undefined);
-      vi.spyOn(serviceProvider as any, "_releaseResources").mockResolvedValue(
-        undefined,
-      );
-      vi.spyOn(serviceProvider, "reload").mockResolvedValue(undefined);
-      vi.spyOn(serviceProvider, "start").mockResolvedValue(undefined);
-
-      await serviceProvider.restart();
-
-      expect(serviceProvider.stop).toHaveBeenCalled();
-      expect(serviceProvider.reload).toHaveBeenCalled();
-      expect(serviceProvider.start).toHaveBeenCalled();
-    });
-  });
-
-  describe("reload", () => {
-    it("should reload configuration", async () => {
-      await serviceProvider.reload();
-      expect(mockConfigManager.reload).toHaveBeenCalled();
-    });
-  });
-
-  describe("halt", () => {
-    it("should halt the service", async () => {
-      await serviceProvider.halt();
-    });
-  });
-
-  describe("activate", () => {
-    it("should activate the service", async () => {
-      await serviceProvider.activate();
     });
   });
 
@@ -770,46 +539,6 @@ describe("ServiceProvider", () => {
       );
       expect(result.msgId).toBe("msg-id-test");
       expect(result.promise).toBeDefined();
-    });
-  });
-
-  describe("_stopTask", () => {
-    it("should stop task and delete from tasks map", async () => {
-      const mockTask = {
-        stop: vi.fn().mockResolvedValue(undefined),
-        name: "test-task",
-      };
-      (serviceProvider as any).tasks.set("test-task", mockTask);
-
-      await (serviceProvider as any)._stopTask("test-task");
-
-      expect(mockTask.stop).toHaveBeenCalled();
-    });
-
-    it("should handle task without stop method", async () => {
-      const mockTask = { name: "no-stop" };
-      (serviceProvider as any).tasks.set("no-stop", mockTask);
-
-      const result = await (serviceProvider as any)._stopTask("no-stop");
-      expect(result).toBeUndefined();
-    });
-
-    it("should handle task not found", async () => {
-      const result = await (serviceProvider as any)._stopTask("non-existent");
-      expect(result).toBeUndefined();
-    });
-  });
-
-  describe("_stopManagerTask", () => {
-    it("should stop manager task when exists", async () => {
-      vi.spyOn(serviceProvider as any, "_stopTask").mockResolvedValue(
-        undefined,
-      );
-      (serviceProvider as any).tasks.set("_svcManager", createMockTcpClient());
-
-      await (serviceProvider as any)._stopManagerTask();
-
-      expect(serviceProvider["_stopTask"]).toHaveBeenCalledWith("_svcManager");
     });
   });
 
@@ -967,7 +696,7 @@ describe("ServiceProvider", () => {
         msgId: "msg-1",
       };
 
-      (serviceProvider as any)._updateApiCouynter(AckValue.None, json);
+      (serviceProvider as any)._updateApiCounter(AckValue.None, json);
       const counter = (serviceProvider as any)._apiCounter.get("testApi");
       expect(counter?.success).toBe(1);
     });
@@ -980,7 +709,7 @@ describe("ServiceProvider", () => {
         msgId: "msg-1",
       };
 
-      (serviceProvider as any)._updateApiCouynter(
+      (serviceProvider as any)._updateApiCounter(
         AckValue.InvalidReqData,
         json,
       );
@@ -996,112 +725,9 @@ describe("ServiceProvider", () => {
         msgId: "msg-1",
       };
 
-      (serviceProvider as any)._updateApiCouynter(AckValue.Error, json);
+      (serviceProvider as any)._updateApiCounter(AckValue.Error, json);
       const counter = (serviceProvider as any)._apiCounter.get("testApi");
       expect(counter?.failedOnProcess).toBe(1);
-    });
-  });
-
-  describe("_stopReportSchedule", () => {
-    it("should clear interval when timer exists", async () => {
-      vi.useFakeTimers();
-      const mockTimer = setInterval(() => {}, 1000);
-      (serviceProvider as any)._reportTimer = mockTimer;
-
-      await (serviceProvider as any)._stopReportSchedule();
-
-      expect((serviceProvider as any)._reportTimer).toBeNull();
-      clearInterval(mockTimer);
-      vi.useRealTimers();
-    });
-
-    it("should do nothing when timer is null", async () => {
-      (serviceProvider as any)._reportTimer = null;
-
-      await (serviceProvider as any)._stopReportSchedule();
-    });
-  });
-
-  describe("_startReportSchedule", () => {
-    it("should start report schedule when conditions are met", async () => {
-      const mockTcpClient = createMockTcpClient();
-      (serviceProvider as any).tasks.set("_svcManager", mockTcpClient);
-      (serviceProvider as any)._reportTimer = null;
-
-      const reportConfig = {
-        enabled: true,
-        interval: 1000,
-      };
-
-      const configWithReporting = {
-        getCoreConfig: () => ({
-          ...mockConfigManager.getCoreConfig(),
-          report: reportConfig,
-        }),
-        getLogger: () => mockLogger,
-      };
-
-      (serviceProvider as any).configManager = configWithReporting;
-
-      await (serviceProvider as any)._startReportSchedule();
-
-      const timer = (serviceProvider as any)._reportTimer;
-      expect(timer).not.toBeNull();
-
-      clearInterval(timer);
-    });
-
-    it("should not start when reporting is disabled", async () => {
-      const configWithReportingDisabled = {
-        getCoreConfig: () => ({
-          ...mockConfigManager.getCoreConfig(),
-          report: { enabled: false },
-        }),
-        getLogger: () => mockLogger,
-      };
-
-      (serviceProvider as any).configManager = configWithReportingDisabled;
-
-      await (serviceProvider as any)._startReportSchedule();
-
-      expect((serviceProvider as any)._reportTimer).toBeNull();
-    });
-
-    it("should not start when no manager task exists", async () => {
-      (serviceProvider as any).tasks.clear();
-
-      const reportConfig = {
-        enabled: true,
-        interval: 1000,
-      };
-
-      const configWithReporting = {
-        getCoreConfig: () => ({
-          ...mockConfigManager.getCoreConfig(),
-          report: reportConfig,
-        }),
-        getLogger: () => mockLogger,
-      };
-
-      (serviceProvider as any).configManager = configWithReporting;
-
-      await (serviceProvider as any)._startReportSchedule();
-
-      expect((serviceProvider as any)._reportTimer).toBeNull();
-    });
-  });
-
-  describe("_stopTask error handling", () => {
-    it("should log error when task.stop() fails", async () => {
-      const mockTask = {
-        stop: vi.fn().mockRejectedValue(new Error("Stop failed")),
-        name: "failing-task",
-      };
-      (serviceProvider as any).tasks.set("failing-task", mockTask);
-
-      await (serviceProvider as any)._stopTask("failing-task");
-
-      expect(mockTask.stop).toHaveBeenCalled();
     });
   });
 
@@ -1269,20 +895,6 @@ describe("ServiceProvider", () => {
       it("should return empty array when no instances reported", () => {
         const instances = serviceManager.getReportedInstances();
         expect(instances).toEqual([]);
-      });
-    });
-
-    describe("getTcpServer", () => {
-      it("should return undefined when no TCP server is registered", () => {
-        const tcpServer = serviceManager.getTcpServer("non-existent");
-        expect(tcpServer).toBeUndefined();
-      });
-    });
-
-    describe("getUdpServer", () => {
-      it("should return undefined when no UDP server is registered", () => {
-        const udpServer = serviceManager.getUdpServer("non-existent");
-        expect(udpServer).toBeUndefined();
       });
     });
   });

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ServiceProvider } from "../../provider/service-provider";
-import { ExecutionState, AccessPoint } from "../../types/basal-protocol";
+import { ExecutionState, AccessPoint, AckValue, ApiCall, SECOND } from "../../types/basal-protocol";
 import { DefaultIdGenerator } from "../../common/id-generator";
 import { TcpClient } from "../../network/tcp-client";
 import { TcpServer } from "../../network/tcp-server";
@@ -167,71 +167,6 @@ describe("ServiceProvider Private Methods Coverage", () => {
     });
   });
 
-  describe("_startReportSchedule", () => {
-    it("should not start schedule when report is disabled", async () => {
-      const disabledProvider = new TestServiceProvider(false);
-      await (disabledProvider as any)._startReportSchedule();
-
-      expect(disabledProvider.testLogger.info).toHaveBeenCalledWith(
-        expect.stringContaining("disabled"),
-      );
-    });
-
-    it("should not start schedule when no ServiceManager task exists", async () => {
-      const enabledProvider = new TestServiceProvider(true);
-      await (enabledProvider as any)._startReportSchedule();
-
-      expect(enabledProvider.testLogger.info).toHaveBeenCalledWith(
-        expect.stringContaining("No ServiceManager found"),
-      );
-    });
-
-    it("should start schedule when report enabled and SM task exists", async () => {
-      const enabledProvider = new TestServiceProvider(true);
-      const mockClient = {
-        stop: vi.fn().mockResolvedValue(undefined),
-        getSocket: vi.fn(() => ({})),
-      };
-      Object.setPrototypeOf(mockClient, TcpClient.prototype);
-
-      (enabledProvider as any).tasks.set("_svcManager", mockClient);
-
-      await (enabledProvider as any)._startReportSchedule();
-
-      expect(enabledProvider.testLogger.info).toHaveBeenCalledWith(
-        expect.stringContaining("Automatic reporting started"),
-      );
-      expect((enabledProvider as any)._reportTimer).toBeDefined();
-    });
-  });
-
-  describe("_stopReportSchedule", () => {
-    it("should clear the report timer if running", async () => {
-      const enabledProvider = new TestServiceProvider(true);
-      const mockClient = {
-        stop: vi.fn().mockResolvedValue(undefined),
-        getSocket: vi.fn(() => ({})),
-      };
-      Object.setPrototypeOf(mockClient, TcpClient.prototype);
-
-      (enabledProvider as any).tasks.set("_svcManager", mockClient);
-      await (enabledProvider as any)._startReportSchedule();
-      expect((enabledProvider as any)._reportTimer).toBeDefined();
-
-      await (enabledProvider as any)._stopReportSchedule();
-
-      expect((enabledProvider as any)._reportTimer).toBeNull();
-    });
-
-    it("should handle when timer is not running", async () => {
-      (provider as any)._reportTimer = null;
-
-      await expect(
-        (provider as any)._stopReportSchedule(),
-      ).resolves.not.toThrow();
-    });
-  });
-
   describe("_releaseResponseChannels", () => {
     it("should close all response channel clients", async () => {
       const mockClient1 = {
@@ -268,29 +203,9 @@ describe("ServiceProvider Private Methods Coverage", () => {
     });
   });
 
-  describe("_stopManagerTask", () => {
-    it("should stop and remove the manager task", async () => {
-      const mockManagerTask = {
-        stop: vi.fn().mockResolvedValue(undefined),
-      };
-      (provider as any).tasks.set("_svcManager", mockManagerTask);
-
-      await (provider as any)._stopManagerTask();
-
-      expect(mockManagerTask.stop).toHaveBeenCalled();
-      expect((provider as any).tasks.get("_svcManager")).toBeUndefined();
-    });
-
-    it("should handle when no manager task exists", async () => {
-      (provider as any).tasks.delete("_svcManager");
-
-      await expect((provider as any)._stopManagerTask()).resolves.not.toThrow();
-    });
-  });
-
   describe("_initializeResources", () => {
     it("should initialize TCP server and response channel", async () => {
-      vi.spyOn(provider as any, "initializeTcpServer").mockResolvedValue(
+      vi.spyOn(provider as any, "getTcpServer").mockResolvedValue(
         {} as TcpServer,
       );
       vi.spyOn(provider as any, "setResponseChannel").mockResolvedValue(
@@ -299,7 +214,7 @@ describe("ServiceProvider Private Methods Coverage", () => {
 
       await (provider as any)._initializeResources();
 
-      expect((provider as any).initializeTcpServer).toHaveBeenCalledWith(
+      expect((provider as any).getTcpServer).toHaveBeenCalledWith(
         "_chnResponse",
       );
       expect((provider as any).setResponseChannel).toHaveBeenCalledWith(true);
@@ -367,6 +282,297 @@ describe("ServiceProvider Private Methods Coverage", () => {
 
       expect(result).toBeDefined();
       expect(result?.api).toBe(mockHandler);
+    });
+  });
+
+  describe("_setConfigManager", () => {
+    it("should set config manager and reinitialize logger", () => {
+      const newConfig = {
+        getCoreConfig: () => ({}),
+        getLogger: () => ({
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+          silly: vi.fn(),
+        }),
+      };
+
+      (provider as any)._setConfigManager(newConfig);
+
+      expect((provider as any).configManager).toBe(newConfig);
+      expect((provider as any).logger).toBeDefined();
+    });
+  });
+
+  describe("_updateApiCounter", () => {
+    it("should increment success counter", () => {
+      const json = { api: "testApi" };
+      (provider as any)._apiCounter = new Map();
+
+      (provider as any)._updateApiCounter(AckValue.None, json);
+
+      const counter = (provider as any)._apiCounter.get("testApi");
+      expect(counter?.success).toBe(1);
+    });
+
+    it("should increment invalidRequest counter", () => {
+      const json = { api: "testApi" };
+      (provider as any)._apiCounter = new Map();
+
+      (provider as any)._updateApiCounter(AckValue.InvalidReqData, json);
+
+      const counter = (provider as any)._apiCounter.get("testApi");
+      expect(counter?.invalidRequest).toBe(1);
+    });
+
+    it("should increment failedOnProcess counter", () => {
+      const json = { api: "testApi" };
+      (provider as any)._apiCounter = new Map();
+
+      (provider as any)._updateApiCounter(AckValue.Error, json);
+
+      const counter = (provider as any)._apiCounter.get("testApi");
+      expect(counter?.failedOnProcess).toBe(1);
+    });
+  });
+
+  describe("_handleRequestError", () => {
+    it("should return AckValue.Error for generic errors", () => {
+      const error = new Error("test error");
+      const result = (provider as any)._handleRequestError(
+        error,
+        "{}",
+        "testApi",
+      );
+      expect(result).toBe(AckValue.Error);
+    });
+
+    it("should return AckValue.InvalidReqData for JSON parse errors", () => {
+      const error = new SyntaxError("Invalid JSON");
+      const result = (provider as any)._handleRequestError(
+        error,
+        "invalid json",
+        "testApi",
+      );
+      expect(result).toBe(AckValue.InvalidReqData);
+    });
+
+    it("should return AckValue.InvalidReqData for TypeErrors", () => {
+      const error = new TypeError("null is not an object");
+      const result = (provider as any)._handleRequestError(
+        error,
+        "{}",
+        "testApi",
+      );
+      expect(result).toBe(AckValue.InvalidReqData);
+    });
+  });
+
+  describe("_updateProviderInfo", () => {
+    it("should update provider info", () => {
+      (provider as any).PROVIDER_INFO = {} as any;
+      (provider as any).PROTOCOL = {
+        provider: { id: "new-id", name: "NewName", version: "2.0" },
+      };
+
+      (provider as any)._updateProviderInfo();
+
+      expect((provider as any).PROVIDER_INFO).toBeDefined();
+    });
+  });
+
+  describe("getState", () => {
+    it("should return current state", () => {
+      (provider as any)._providerState = {
+        getState: vi.fn().mockReturnValue(ExecutionState.Running),
+      };
+
+      const state = (provider as any).getState();
+
+      expect(state).toBe(ExecutionState.Running);
+    });
+  });
+
+  describe("getState", () => {
+    it("should return current state", () => {
+      (provider as any)._providerState = {
+        getState: vi.fn().mockReturnValue(ExecutionState.Running),
+      };
+
+      const state = (provider as any).getState();
+
+      expect(state).toBe(ExecutionState.Running);
+    });
+  });
+
+  describe("getTask", () => {
+    it("should return task by name", () => {
+      const mockTask = { name: "test-task" };
+      (provider as any).tasks = new Map([["test-task", mockTask]]);
+
+      const result = (provider as any).getTask("test-task");
+
+      expect(result).toBe(mockTask);
+    });
+
+    it("should return default task when name not specified", () => {
+      const mockTask = { name: "_chnResponse" };
+      (provider as any).tasks = new Map([["_chnResponse", mockTask]]);
+
+      const result = (provider as any).getTask();
+
+      expect(result).toBe(mockTask);
+    });
+  });
+
+  describe("getPeerId", () => {
+    it("should return arrowed peer id", () => {
+      const data: ApiCall = {
+        peer: { service: "TestService", instance: "inst-1" },
+        api: "test",
+        args: {},
+      };
+
+      const result = (provider as any).getPeerId(data, true);
+
+      expect(result).toContain("TestService");
+      expect(result).toContain("inst-1");
+    });
+
+    it("should return non-arrowed peer id", () => {
+      const data: ApiCall = {
+        peer: { service: "TestService", instance: "inst-1" },
+        api: "test",
+        args: {},
+      };
+
+      const result = (provider as any).getPeerId(data, false);
+
+      expect(result).toContain("TestService");
+      expect(result).toContain("inst-1");
+    });
+  });
+
+  describe("delay", () => {
+    it("should delay for specified milliseconds", async () => {
+      const start = Date.now();
+      await (provider as any).delay(50);
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeGreaterThanOrEqual(45);
+    });
+  });
+
+  describe("getMetrics", () => {
+    it("should return metrics instance", () => {
+      const mockMetrics = {};
+      (provider as any).metrics = mockMetrics;
+
+      const result = (provider as any).getMetrics();
+
+      expect(result).toBe(mockMetrics);
+    });
+  });
+
+  describe("_handleApiRequest", () => {
+    it("should return early when data is missing", async () => {
+      await (provider as any)._handleApiRequest(null as any);
+      expect(provider.testLogger.debug).toHaveBeenCalledWith(
+        "Incomplete message received.",
+      );
+    });
+  });
+
+  describe("_handleApiResponse", () => {
+    it("should return early when peer is missing", () => {
+      (provider as any)._handleApiResponse({ peer: null as any, data: "test" });
+      expect(provider.testLogger.debug).toHaveBeenCalledWith(
+        "Incomplete message received.",
+      );
+    });
+
+    it("should return early when data is missing", () => {
+      (provider as any)._handleApiResponse({ peer: {} as any, data: null as any });
+      expect(provider.testLogger.debug).toHaveBeenCalledWith(
+        "Incomplete message received.",
+      );
+    });
+
+    it("should return early when data is too short", () => {
+      (provider as any)._handleApiResponse({ peer: {} as any, data: "short" });
+      expect(provider.testLogger.debug).toHaveBeenCalledWith(
+        "Incomplete message received.",
+      );
+    });
+  });
+
+  describe("getResponseChannel", () => {
+    it("should return existing channel client", async () => {
+      const mockClient = { name: "client1" };
+      (provider as any).chnResp = {
+        "test-svc": { "inst-1": mockClient },
+      };
+      (provider as any).tasks = new Map();
+
+      const result = await (provider as any).getResponseChannel({
+        peer: { service: "test-svc", instance: "inst-1" },
+        api: "test",
+        args: {},
+      });
+
+      expect(result).toBe(mockClient);
+    });
+  });
+
+  describe("setApiChannel", () => {
+    it("should subscribe to API channel events", async () => {
+      const mockServer = {
+        on: vi.fn(),
+        off: vi.fn(),
+      };
+      vi.spyOn(provider as any, "getTcpServer").mockResolvedValue(mockServer as any);
+
+      await (provider as any).setApiChannel(true);
+
+      expect(mockServer.on).toHaveBeenCalled();
+    });
+
+    it("should unsubscribe from API channel events", async () => {
+      const mockServer = {
+        on: vi.fn(),
+        off: vi.fn(),
+      };
+      vi.spyOn(provider as any, "getTcpServer").mockResolvedValue(mockServer as any);
+
+      await (provider as any).setApiChannel(false);
+
+      expect(mockServer.off).toHaveBeenCalled();
+    });
+  });
+
+  describe("setResponseChannel", () => {
+    it("should subscribe to response channel events", async () => {
+      const mockServer = {
+        on: vi.fn(),
+        off: vi.fn(),
+      };
+      vi.spyOn(provider as any, "getTcpServer").mockResolvedValue(mockServer as any);
+
+      await (provider as any).setResponseChannel(true);
+
+      expect(mockServer.on).toHaveBeenCalled();
+    });
+
+    it("should unsubscribe from response channel events", async () => {
+      const mockServer = {
+        on: vi.fn(),
+        off: vi.fn(),
+      };
+      vi.spyOn(provider as any, "getTcpServer").mockResolvedValue(mockServer as any);
+
+      await (provider as any).setResponseChannel(false);
+
+      expect(mockServer.off).toHaveBeenCalled();
     });
   });
 });

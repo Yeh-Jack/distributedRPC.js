@@ -7,8 +7,9 @@ import "reflect-metadata";
 
 import { container, createProvider } from "./aop/container";
 import { ConfigManager } from "./common/config";
+import { LoggerManager } from "./common/logger";
 import { ServiceManager } from "./manager/service-manager";
-import { ServiceProvider } from "./provider/service-provider";
+import { ServiceEvent, ServiceProvider } from "./provider/service-provider";
 
 const INTERRUPT_KEY = "<Ctrl+C>";
 
@@ -61,6 +62,43 @@ function handleInterruption(providers: ServiceProvider[], logger: any) {
   });
 }
 
+function handleServiceEvent(
+  logger: ReturnType<LoggerManager["getLogger"]>,
+  instance: ServiceProvider,
+  event: ServiceEvent,
+  msg: string,
+) {
+  logger.info(`${msg} [${event}] received from ${instance.getIdentity()}.`);
+}
+
+function subscribeServiceEvent(
+  logger: ReturnType<LoggerManager["getLogger"]>,
+  provider: ServiceProvider,
+) {
+  const emitter = provider.getEventEmitter();
+  const mgr: ServiceEvent[] = [
+    ServiceEvent.ManagerConnected,
+    ServiceEvent.ManagerDisconnect,
+  ];
+  for (const evn of mgr) {
+    emitter.on(evn, (instance: ServiceProvider) => {
+      handleServiceEvent(logger, instance, evn, "Manager event");
+    });
+  }
+
+  const svc: ServiceEvent[] = [
+    ServiceEvent.ServiceHalted,
+    ServiceEvent.ServiceShutdown,
+    ServiceEvent.ServiceStarted,
+    ServiceEvent.ServiceStopped,
+  ];
+  for (const evn of svc) {
+    emitter.on(evn, (instance: ServiceProvider) => {
+      handleServiceEvent(logger, instance, evn, "Provider event");
+    });
+  }
+}
+
 /**
  * Main entry point function that initializes and starts the distributed RPC service.
  *
@@ -88,6 +126,10 @@ async function main(): Promise<void> {
   const providerName = provider.getServiceName();
   const providers = [manager, provider];
 
+  // Subscribe to service events from providers.
+  for (const pvd of providers) {
+    subscribeServiceEvent(logger, pvd);
+  }
   handleInterruption(providers, logger);
   logger.info(`${managerName} and ${providerName} instances are constructed.`);
 

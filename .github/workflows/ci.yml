@@ -61,9 +61,12 @@ jobs:
 
       - name: Update README with coverage
         if: env.ACT != 'true'
+        env:
+          COVERAGE_PCT: ${{ steps.coverage.outputs.coverage }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           if [ -f README.md ]; then
-            sed -i '/^# distributedRPC.js$/a\\n[![Coverage](https://img.shields.io/badge/Coverage-'${{ steps.coverage.outputs.coverage }}'%25-orange)]('${{ github.server_url }}/${{ github.repository }}/actions/workflows/ci.yml)'\' README.md
+            sed -i "/^# distributedRPC.js$/a\\\\n[![Coverage](https://img.shields.io/badge/Coverage-${COVERAGE_PCT}%25-orange)](${REPO_URL}/actions/workflows/ci.yml)" README.md
           fi
 
       - name: SonarQube Scan

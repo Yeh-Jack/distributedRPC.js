@@ -1,0 +1,1224 @@
+import { Socket as TcpSocket } from "net";
+import { inject, injectable } from "inversify";
+import { DetectedResourceAttributes } from "@opentelemetry/resources";
+import {
+  ATTR_SERVICE_NAME,
+  ATTR_SERVICE_VERSION,
+} from "@opentelemetry/semantic-conventions";
+
+import { createNamedTcpServer, TYPES } from "../aop/container";
+import { ConfigManager } from "../common/config";
+import { LoggerManager } from "../common/logger";
+import { OtelMeterics, OtelProviderState } from "../metrics/otel-metrics";
+import { OtelTracer } from "../metrics/otel-tracing";
+import {
+  NetworkEvent,
+  NetworkPeer,
+  getHostIP,
+} from "../network/network-events";
+import { TcpClient } from "../network/tcp-client";
+import { TcpServer } from "../network/tcp-server";
+import { TypedEventEmitter } from "../network/typed-event-emitter";
+import { LifeCycleContext, LifeCycleOperation } from "../procedure";
+import { LifeCycleProcedure } from "../procedure/life-cycle";
+import { ManagerInfo } from "../procedure/discover";
+import {
+  AccessPoint,
+  AckType,
+  AckValue,
+  ApiCall,
+  ApiCounter,
+  ApiSpec,
+  AppEnv,
+  BasalProtocol,
+  ExecutionState,
+  IdGenerator,
+  NetworkProtocol,
+  PeerIdentity,
+  ProviderConnectInfo,
+  ResponseArgs,
+  SocketAddress,
+  getAppEnv,
+  DEFAULT_ENCODE,
+  FOLLOW_UP,
+  MAX_HEADER_LEN,
+  UNKNOWN_ATTRIBUTE,
+} from "../types/basal-protocol";
+import {
+  ProviderState,
+  ProviderInfo,
+  ATTR_DEPLOY_ENV,
+  ATTR_PROTOCOL_VERSION,
+  ATTR_SERVICE_INSTANCE,
+} from "./provider-info";
+
+/**
+ * Task name.
+ */
+export enum ProviderTask {
+  ChannelApi = "_chnAPI",
+  ChannelResponse = "_chnResponse",
+  ChannelSys = "_chnSys",
+  Manager = "_svcManager",
+}
+
+/**
+ * Service events emitted by ServiceProvider.
+ */
+export enum ServiceEvent {
+  ManagerConnected = "mgrConnect",
+  ManagerDisconnect = "mgrDisconnect",
+  ServiceHalted = "svcHalt",
+  ServiceShutdown = "svcDown",
+  ServiceStarted = "svcStart",
+  ServiceStopped = "svcStop",
+}
+
+/**
+ * Event map for TypedEventEmitter, mapping event names to their callback signatures.
+ */
+export interface ServiceEventMap {
+  [ServiceEvent.ManagerConnected]: (instance: ServiceProvider) => void;
+  [ServiceEvent.ManagerDisconnect]: (instance: ServiceProvider) => void;
+  [ServiceEvent.ServiceHalted]: (instance: ServiceProvider) => void;
+  [ServiceEvent.ServiceShutdown]: (instance: ServiceProvider) => void;
+  [ServiceEvent.ServiceStarted]: (instance: ServiceProvider) => void;
+  [ServiceEvent.ServiceStopped]: (instance: ServiceProvider) => void;
+}
+
+@injectable()
+export class ServiceProvider {
+  // Protocol of this service.
+  protected readonly PROTOCOL: BasalProtocol;
+
+  // EventEmitter component.
+  protected readonly events = new TypedEventEmitter<ServiceEventMap>();
+
+  protected configManager: ConfigManager;
+  protected logger!: ReturnType<LoggerManager["getLogger"]>;
+
+  // Internal map of tasks, task name is the key.
+  protected tasks: Map<string, any> = new Map();
+
+  // Map of API names to handler functions.
+  protected apis: any = {};
+
+  /*
+   * Response channels indexed by service name and instance ID.
+   * Structure: { service: { instance: TcpClient } }
+   */
+  protected chnResp: Record<string, Record<string, TcpClient>> = {};
+
+  /**
+   * Pending API requests pool, indexed by message ID.
+   * Structure: { msgId: ApiCall }
+   */
+  protected polReqs: Map<string, ApiCall> = new Map();
+
+  // OpenTelemetry instances.
+  protected metrics!: OtelMeterics;
+  protected tracer!: OtelTracer;
+
+  // Keep API called execution statistics.
+  private _apiCounter: Map<string, Omit<ApiCounter, "total">> = new Map();
+
+  // Procedure instances.
+  private _procedure: any = {};
+
+  // States of this instance.
+  private _initialized: boolean = false;
+  private _providerState!: ProviderState;
+
+  /**
+   * Creates a ServiceProvider instance.
+   * @param idGenerator - The ID generator for creating message and instance IDs
+   */
+  public constructor(
+    @inject(TYPES.IdGenerator) protected idGenerator: IdGenerator,
+  ) {
+    const serviceName = this.constructor.name;
+    this.PROTOCOL = {
+      protocol_ver: "1.0.0",
+      provider: {
+        id: this.idGenerator.shortId(),
+        name: serviceName,
+        desc: "Unknown service provider.",
+        version: "1.0.0",
+      },
+      apis: {},
+    };
+    this.configManager = new ConfigManager(serviceName);
+  }
+
+  // This is the "Destructor"
+  [Symbol.dispose]() {
+    this.lifeCycle("shutdown");
+  }
+
+  /**
+   * Gets the configuration manager for this service.
+   *
+   * @returns The ConfigManager instance
+   */
+  public getConfigManager(): ConfigManager {
+    return this.configManager;
+  }
+
+  /**
+   * For subscribing events emitted by this service provider instance.
+   *
+   * @returns event emitter of this instance.
+   */
+  public getEventEmitter(): TypedEventEmitter<ServiceEventMap> {
+    return this.events;
+  }
+
+  /**
+   * Get the unique identity string of the service instance.
+   *
+   * @returns The unique identity string.
+   */
+  public getIdentity(
+    provider: BasalProtocol = this.PROTOCOL,
+    arrowed: boolean = true,
+  ): string {
+    const msg = `${provider.provider.name}-${provider.provider.id}`;
+    return arrowed ? `<${msg}>` : msg;
+  }
+
+  /**
+   * Gets the logger instance for this service.
+   *
+   * @returns The logger instance
+   */
+  public getLogger() {
+    return this.logger;
+  }
+
+  /**
+   * Returns the protocol configuration as a JSON string.
+   */
+  /**
+   * Returns the protocol configuration as a JSON string.
+   *
+   * @returns JSON string representation of the protocol configuration
+   */
+  public async getProtocol(): Promise<string> {
+    return JSON.stringify(this.PROTOCOL);
+  }
+
+  /**
+   * Get current ServiceManager information only without instance.
+   * @returns
+   */
+  public getServiceManagerInfo(): ManagerInfo {
+    return this.getServiceManager(true);
+  }
+
+  /**
+   * Returns the configured service name.
+   *
+   * @returns The service name from configuration.
+   */
+  public getServiceName(): string {
+    return this.PROTOCOL.provider.name;
+  }
+
+  /**
+   * Gets the current execution state of the provider.
+   *
+   * @returns The current ExecutionState
+   */
+  public getState(): ExecutionState {
+    return this._providerState.getState();
+  }
+
+  public async lifeCycle(op: LifeCycleOperation): Promise<boolean> {
+    const procedure: LifeCycleProcedure = this._getLifeCycle();
+    if (!procedure) {
+      this.logger.warn("No LifeCycleProcedure is loaded.");
+      return false;
+    }
+
+    // Context for execute the procedure.
+    const context: LifeCycleContext = {
+      parent: this,
+      taskName: ProviderTask.Manager,
+      tasks: this.tasks,
+      idGenerator: this.idGenerator,
+      eventEmitter: this.events,
+      operation: op,
+
+      ask: this.ask.bind(this),
+      buildMessage: this.buildMessage.bind(this),
+      getIdentity: this.getIdentity.bind(this),
+      setState: this.setState.bind(this),
+    };
+
+    return await procedure.execute(context);
+  }
+
+  public logProtocol(): void {
+    this.logger.info(
+      `Protocol of the ${this.PROTOCOL.provider.name}:\n` +
+        JSON.stringify(this.PROTOCOL, undefined, 2),
+    );
+  }
+
+  // --------------------------------------------
+  // Methods forced to be implemented on subclass.
+  // --------------------------------------------
+
+  /**
+   * Initializes resources specific to the subclass.
+   * Override this method to perform subclass-specific initialization.
+   *
+   * @throws {Error} If not implemented by subclass
+   */
+  protected async initializingResources(): Promise<void> {
+    if (this.constructor.name !== "ServiceProvider")
+      throw new Error("Method initializing() is not implemented.");
+  }
+
+  /**
+   * Releases resources specific to the subclass.
+   * Override this method to perform subclass-specific cleanup.
+   *
+   * @throws {Error} If not implemented by subclass
+   */
+  protected async releasingResources(): Promise<void> {
+    if (this.constructor.name !== "ServiceProvider")
+      throw new Error("Method releasingResources() is not implemented.");
+  }
+
+  /**
+   * Reloads configuration specific to the subclass.
+   * Override this method to handle subclass-specific reload logic.
+   *
+   * @throws {Error} If not implemented by subclass
+   */
+  protected async reloading(): Promise<void> {
+    if (this.constructor.name !== "ServiceProvider")
+      throw new Error("Method reloading() is not implemented.");
+  }
+
+  /**
+   * Starts services specific to the subclass.
+   * Override this method to perform subclass-specific startup logic.
+   *
+   * @throws {Error} If not implemented by subclass
+   */
+  protected async starting(): Promise<void> {
+    if (this.constructor.name !== "ServiceProvider")
+      throw new Error("Method starting() is not implemented.");
+  }
+
+  /**
+   * Stops services specific to the subclass.
+   * All tasks in the `tasks` map will be stopped automatically if the task has `stop()` method.
+   * Override this method to perform subclass-specific shutdown logic.
+   *
+   * @throws {Error} If not implemented by subclass
+   */
+  protected async stopping(): Promise<void> {
+    if (this.constructor.name !== "ServiceProvider")
+      throw new Error("Method stopping() is not implemented.");
+  }
+
+  // --------------------------------------------
+  // Protected Methods
+  // --------------------------------------------
+
+  /**
+   * Sends an API call to a helper TCP client and tracks the pending request.
+   *
+   * @param helper - The TCP client to send the message through
+   * @param message - The API call message to send
+   * @param ackType - The acknowledgment type expected
+   * @returns Promise resolving to message ID and optional promise for response
+   */
+  protected async ask(
+    helper: TcpClient,
+    message: ApiCall,
+    ackType: AckType,
+  ): Promise<{ msgId: string; promise?: Promise<any> }> {
+    const msgId = await helper.sendMessage(message);
+    this.polReqs.set(msgId, message);
+    if (ackType === AckType.None) {
+      return { msgId };
+    }
+
+    const { promise, resolve, reject } = Promise.withResolvers();
+    message.promise = {
+      resolve: resolve,
+      reject: reject,
+    };
+    return { msgId, promise };
+  }
+
+  /**
+   * Requests provider connection information from the ServiceManager.
+   *
+   * @param data - API call containing peer information
+   * @returns Promise resolving to ProviderConnectInfo or undefined if not available
+   */
+  protected async askProviderInfo(
+    data: ApiCall,
+  ): Promise<ProviderConnectInfo | undefined> {
+    // TODO: Implement provider info request
+    return;
+  }
+
+  /**
+   * Provide actual access point information based on the provided base information.
+   * The goal is to provide the `authorization` and `function` information for this provider.
+   *
+   * @param baseInfo - The base access point information to build upon
+   * @returns The constructed access point with built information
+   * @throws {Error} This method is not implemented in the base class and must be overridden by subclasses
+   */
+  protected buildAccessPointInfo(baseInfo: AccessPoint): AccessPoint {
+    if (this.constructor.name !== "ServiceProvider")
+      throw new Error(
+        "Method buildAccessPointInfo(baseInfo: AccessPoint) is not implemented.",
+      );
+    return baseInfo;
+  }
+
+  /**
+   * Builds an API call message with peer identity and specified API path.
+   *
+   * @param apiPath - The API procedure path (e.g., "register", "report")
+   * @param args - Optional arguments to pass to the API procedure
+   * @param msgId - Optional message ID for tracking
+   * @returns The constructed ApiCall message
+   */
+  protected buildMessage(apiPath: string, args?: any, msgId?: string): ApiCall {
+    const peer: PeerIdentity = {
+      service: this.PROTOCOL.provider.name,
+      instance: this.PROTOCOL.provider.id,
+      // ...this._getSocketAddr(ProviderTask.ChannelResponse),
+    };
+
+    const api: ApiCall = {
+      peer: peer,
+      api: apiPath, // Path name of the procedure.
+      args: args, // Arguments for the procedure call.
+      msgId: msgId,
+    };
+    return api;
+  }
+
+  /**
+   * Collects provider information from the protocol configuration.
+   *
+   * @returns ProviderInfo object with service name, instance ID, version, and environment
+   */
+  protected collectInstanceInfo(): ProviderInfo {
+    const provider = this.PROTOCOL.provider;
+    const resource: ProviderInfo = {
+      enabled: true,
+      [ATTR_SERVICE_NAME]: provider.name,
+      [ATTR_SERVICE_INSTANCE]: provider.id,
+      [ATTR_SERVICE_VERSION]: provider.version,
+      [ATTR_PROTOCOL_VERSION]: this.PROTOCOL.protocol_ver,
+      [ATTR_DEPLOY_ENV]: getAppEnv() || AppEnv.development,
+    };
+    return resource;
+  }
+
+  /**
+   * Utility delay function.
+   *
+   * @param ms - Milliseconds to delay
+   * @returns Promise that resolves after the delay
+   */
+  protected delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Returns the metrics instance for this service.
+   *
+   * @returns The OtelMeterics instance.
+   */
+  protected getMetrics(): OtelMeterics {
+    return this.metrics;
+  }
+
+  /**
+   * Extracts the peer identity from an API call message.
+   *
+   * @param data - The API call containing peer information
+   * @param arrowed - Whether to wrap the identity in angle brackets
+   * @returns The peer identity string
+   */
+  protected getPeerId(data: ApiCall, arrowed: boolean = true): string {
+    const peer: PeerIdentity = data.peer;
+    const msg = `${peer.service}-${peer.instance}`;
+    return arrowed ? `<${msg}>` : msg;
+  }
+
+  /**
+   * Gets or creates a response channel TCP client for a peer.
+   * If the channel doesn't exist, it queries the ServiceManager for provider
+   * connection info and creates a new TCP client.
+   *
+   * @param data - API call containing peer information
+   * @returns The TCP client for the response channel
+   * @throws Error if peer information is missing or provider info cannot be obtained
+   */
+  protected async getResponseChannel(data: ApiCall): Promise<TcpClient> {
+    const peer: PeerIdentity = data.peer;
+    if (!(peer?.service && peer?.instance)) {
+      throw new Error("Lack of response target information.");
+    }
+
+    // this.chnResp is in the { service: { instance: TcpClient }} format.
+    let chnService = this.chnResp[peer.service];
+    if (!chnService) {
+      chnService = {};
+      this.chnResp[peer.service] = chnService;
+    }
+
+    let channel = chnService[peer.instance];
+    if (!channel) {
+      // Step 1 : Ask AccessPoint information of the target from ServiceManager.
+      const pvdName = this.getPeerId(data);
+      this.logger.debug(
+        `Asking provider ${pvdName} connection information from service manager ...`,
+      );
+      const pvdInfo: ProviderConnectInfo | undefined =
+        await this.askProviderInfo(data);
+      if (!pvdInfo) {
+        throw new Error(
+          `Unable to get information of the ${pvdName} provider.`,
+        );
+      }
+
+      this.logger.debug(
+        `${FOLLOW_UP}Connecting to response channel of ${this.getSocketString(pvdInfo)}`,
+      );
+
+      // Step 2 : Construct a TcpClient as the response channel of this provider.
+      channel = new TcpClient(
+        this.configManager,
+        pvdInfo,
+        this.getPeerId(data, false),
+        this.idGenerator,
+      );
+
+      // Step 3 : Activate and store this channel.
+      chnService[peer.instance] = channel;
+      await channel.start();
+      channel.on(NetworkEvent.Data, this._handleChannelResponse);
+    }
+    return channel;
+  }
+
+  /**
+   * Get current ServiceManager instance and it's information.
+   * The `instance` member is the actual TcpClient instance which connects to the ServiceManager
+   * instance found and it's meaningful to subclass only.
+   *
+   * @param noInstance Get information only without actual instance, default to true.
+   * @returns
+   */
+  protected getServiceManager(noInstance: boolean = true): ManagerInfo {
+    const procedure: LifeCycleProcedure = this._getLifeCycle();
+    let smInfo: ManagerInfo = procedure.getServiceManager();
+    if (noInstance) {
+      // Remove instance member.
+      const { instance, ...rest } = smInfo;
+      smInfo = rest;
+    }
+    return smInfo;
+  }
+
+  /**
+   * Formats a socket address as a string.
+   *
+   * @param socketAddr - The socket address to format
+   * @param arrowed - Whether to wrap the address in angle brackets
+   * @returns Formatted address string (e.g., "<192.168.1.1:8080>")
+   */
+  protected getSocketString(
+    socketAddr: SocketAddress,
+    arrowed: boolean = true,
+  ): string {
+    const msg = `${socketAddr.address}:${socketAddr.port}`;
+    return arrowed ? `<${msg}>` : msg;
+  }
+
+  /**
+   * Gets a task by name from the internal tasks map.
+   *
+   * @param taskName - The name of the task to retrieve
+   * @returns The task instance
+   * @throws Error if the task doesn't exist
+   */
+  protected getTask(taskName: string = ProviderTask.ChannelResponse): any {
+    const task = this.tasks.get(taskName);
+    if (!task) {
+      const message = `The <${taskName}> task doesn't exist.`;
+      this.logger.error(message);
+      throw new Error(message);
+    }
+    return task;
+  }
+
+  /**
+   * Get the TcpClient task by name. Returns the existing task or create a new one if absence.
+   * A TcpClient task is used for communicating with a remote endpoint.
+   *
+   * @param name - Unique name for this client task.
+   * @param ap - AccessPoint containing address and port of the remote endpoint.
+   * @returns Promise that resolves to the initialized TcpClient.
+   */
+  protected async getTaskTcpClient(
+    name: string,
+    ap?: AccessPoint,
+  ): Promise<TcpClient> {
+    try {
+      let tcpClient: TcpClient = this.tasks.get(name);
+      if (tcpClient) return tcpClient;
+
+      if (!ap) {
+        throw new Error("Missing AccessPoint argument.");
+      }
+
+      tcpClient = new TcpClient(this.configManager, ap, name, this.idGenerator);
+      this.tasks.set(name, tcpClient);
+      await tcpClient.start();
+      return tcpClient;
+    } catch (error) {
+      this.logger.error(
+        `Failed to initialize the <${name}> TCP client: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Get a TcpServer task by name. Returns the existing task or create a new one if absence.
+   * A TcpServer task is used for accepting instructions from remote.
+   *
+   * @param name - Unique name for this task.
+   * @returns Promise that resolves when the listener is started.
+   */
+  protected async getTaskTcpServer(name: string): Promise<TcpServer> {
+    try {
+      let tcpServer: TcpServer = this.tasks.get(name);
+      if (tcpServer) return tcpServer;
+
+      tcpServer = createNamedTcpServer(this.configManager, name);
+      this.tasks.set(name, tcpServer);
+      await tcpServer.start();
+      return tcpServer;
+    } catch (error) {
+      this.logger.error(
+        `Failed to initialize the <${name}> TCP server: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Gets TCP task information as an AccessPoint for the specified task.
+   *
+   * @param taskName - The task name (defaults to response channel)
+   * @returns AccessPoint with socket address and provider capabilities
+   */
+  protected getTcpTaskInfo(
+    taskName: string = ProviderTask.ChannelResponse,
+  ): AccessPoint {
+    const socketAddr = this._getSocketAddr(taskName);
+    const srvInfo: AccessPoint = {
+      authorization: "", // Authorization key for accessing this provider.
+      api: ["report"], // Capbilities of the provider.
+      // address: getHostIP(), // Host IP of the provider.
+      // port: addr.port, // Port number the access point listening on.
+      // protocol: NetworkProtocol.TCP, // Network protocol of the access point.
+      ...socketAddr,
+    };
+    return this.buildAccessPointInfo(srvInfo);
+  }
+
+  /**
+   * Initializes the API function map with all available handler methods.
+   * Maps API names to their handler methods on this instance.
+   */
+  protected initializeApiFunctionMap(): void {
+    this.apis = {
+      getProtocol: this.getProtocol,
+      // getServiceManagerInfo: this.getServiceManagerInfo,
+      getState: this.getState,
+    };
+  }
+
+  /**
+   * Sends a response to an API request through the target TCP client.
+   * Builds a header with success/failure status and message ID, then sends the payload.
+   *
+   * @param respArgs - Response arguments including API spec, data, error type, request, and target
+   */
+  protected async response(respArgs: ResponseArgs): Promise<void> {
+    const { apiSpec, data, errType, request, target } = respArgs;
+    // target is a TcpSocket if it's responding to a system instruction.
+    if (!(target instanceof TcpClient || target instanceof TcpSocket)) {
+      return; // No target for respond.
+    }
+
+    // 1. Define fixed MAX_MSG_ID_LEN (64) bytes header.
+    /*
+     * The first byte of the header denotes success or failed for this request.
+     * Following with an UUID (message ID) of the request.
+     */
+    const header = Buffer.alloc(MAX_HEADER_LEN, 0);
+    header[0] = 1; // Success.
+    if (request.msgId) header.write(request.msgId, 1, DEFAULT_ENCODE);
+
+    // Handle error situations.
+    let payload: Buffer;
+    if ([AckValue.Error, AckValue.InvalidReqData].includes(errType)) {
+      header[0] = 0; // Failed.
+      // Prepend header to the payload.
+      payload = Buffer.concat([header, Buffer.from(errType, DEFAULT_ENCODE)]);
+      await target.write(payload);
+      return;
+    }
+
+    if (apiSpec.ack != AckType.None) {
+      // Build payload buffer from the response data.
+      if (data) {
+        payload = Buffer.isBuffer(data)
+          ? data
+          : Buffer.from(data, DEFAULT_ENCODE);
+      } else {
+        payload = Buffer.from(AckValue.Ack, DEFAULT_ENCODE);
+      }
+
+      // 3. Prepend header and send response data.
+      payload = Buffer.concat([header, payload]);
+      await target.write(payload);
+    }
+  }
+
+  /**
+   * Sets up the API channel TCP server for handling incoming API requests.
+   *
+   * @param subscribe - Whether to subscribe to data events
+   * @returns The initialized TCP server
+   */
+  protected async setApiChannel(subscribe: boolean): Promise<TcpServer> {
+    const task: TcpServer = await this.getTaskTcpServer(
+      ProviderTask.ChannelApi,
+    );
+    if (subscribe) task.on(NetworkEvent.Data, this._handleTcpApiRequest);
+    else task.off(NetworkEvent.Data, this._handleTcpApiRequest);
+    return task;
+  }
+
+  /**
+   * Sets up the response channel TCP server for receiving API responses from helper.
+   *
+   * @param subscribe - Whether to subscribe to data events
+   * @returns The initialized TCP server
+   */
+  protected async setResponseChannel(subscribe: boolean): Promise<TcpServer> {
+    const task: TcpServer = await this.getTaskTcpServer(
+      ProviderTask.ChannelResponse,
+    );
+    if (subscribe) task.on(NetworkEvent.Data, this._handleApiResponse);
+    else task.off(NetworkEvent.Data, this._handleApiResponse);
+    return task;
+  }
+
+  /**
+   * Sets the server state.
+   *
+   * @param state - The new server state to set.
+   */
+  protected setState(state: ExecutionState): void {
+    const curState = this.getState();
+    if (curState !== state) {
+      this._providerState.setState(state);
+      this.logger.info(`${this.getIdentity()} state: ${curState} → ${state}.`);
+    }
+  }
+
+  // --------------------------------------------
+  // Private Methods
+  // --------------------------------------------
+
+  private _getLifeCycle(): LifeCycleProcedure {
+    // Return the existing LifeCycleProcedure.
+    let procedure: LifeCycleProcedure = this._procedure.lifeCycle;
+    if (procedure && procedure instanceof LifeCycleProcedure) return procedure;
+
+    // Lazy initialization of the procedure.
+    procedure = new LifeCycleProcedure(this.configManager);
+    this._procedure.lifeCycle = procedure;
+    return procedure;
+  }
+
+  /**
+   * Gets the socket address (IP and port) from a task.
+   *
+   * @param taskName - The task name to query
+   * @returns SocketAddress with address, port, and TCP protocol
+   * @throws Error if task is not a TCP server/client or is malfunctioning
+   */
+  private _getSocketAddr(
+    taskName: string = ProviderTask.ChannelResponse,
+  ): SocketAddress {
+    let addr:
+        | {
+            address: string;
+            port: number;
+          }
+        | undefined,
+      protocol: NetworkProtocol = NetworkProtocol.TCP;
+    const task = this.getTask(taskName);
+    if (task instanceof TcpServer) addr = task.getServer()?.address() as any;
+    else if (task instanceof TcpClient)
+      addr = task.getSocket()?.address() as any;
+    else {
+      const message = `The <${taskName}> task is neither a TCP server nor a TCP client.`;
+      this.logger.error(message);
+      throw new Error(message);
+    }
+    if (!addr || typeof addr !== "object") {
+      const message = `The <${taskName}> task is malfunction.`;
+      this.logger.error(message);
+      throw new Error(message);
+    }
+
+    const socketAddr: SocketAddress = {
+      address: getHostIP(), // Host IP of the provider.
+      port: addr.port, // Port number the access point listening on.
+      protocol: protocol, // Network protocol of the access point.
+    };
+    return socketAddr;
+  }
+
+  /**
+   * Handles incoming API request data from TCP.
+   * Parses JSON, executes the API handler, and sends response.
+   *
+   * @param data - Raw string or Buffer data from TCP
+   */
+  private _handleApiRequest = async (data: string | Buffer): Promise<void> => {
+    if (!data) {
+      this.logger.debug(`Incomplete message received.`);
+      return;
+    }
+
+    let apiSpec!: ApiSpec;
+    let errType: AckValue = AckValue.None;
+    let json!: ApiCall;
+    let result: any[] = [];
+    const message = data instanceof Buffer ? data.toString() : (data as string);
+    const pmsJob: Promise<any>[] = [];
+    try {
+      // 1. Parse the request.
+      json = JSON.parse(message);
+      const parsed = this._parseRequest(json);
+      if (!parsed) {
+        return;
+      }
+      apiSpec = parsed.apiSpec;
+
+      // 2. Perform the requested job.
+      pmsJob.push(parsed.api!.call(this, json));
+
+      // 3. Get the response target channel.
+      pmsJob.push(this.getResponseChannel(json));
+      result = await Promise.all(pmsJob);
+    } catch (err) {
+      errType = this._handleRequestError(err as Error, message, json?.api);
+    } finally {
+      this._updateApiCounter(errType, json);
+      if (result.length > 1) {
+        const respArgs: ResponseArgs = {
+          apiSpec: apiSpec,
+          data: result[0],
+          errType: errType,
+          request: json,
+          target: result[1],
+        };
+        await this.response(respArgs);
+      }
+    }
+  };
+
+  /**
+   * Handles API response data from the response channel.
+   * Extracts header (success/failure and message ID) and payload,
+   * then resolves or rejects the pending promise.
+   *
+   * @param peer - The network peer that sent the response
+   * @param data - The response data buffer
+   */
+  private _handleApiResponse = ({
+    peer,
+    data,
+  }: {
+    peer: NetworkPeer;
+    data: string | Buffer;
+  }): void => {
+    if (!peer || !data || data.length < MAX_HEADER_LEN) {
+      this.logger.debug(`Incomplete message received.`);
+      return;
+    }
+
+    // 1. Extrac header from the response message.
+    /*
+     * The first MAX_HEADER_LEN (64) bytes of the response data is the header.
+     * The first byte of the header denotes success or failed for this request.
+     * Following with an UUID (message ID) of the request.
+     */
+    let payload = Buffer.isBuffer(data)
+      ? data
+      : Buffer.from(data, DEFAULT_ENCODE);
+    const header = payload.subarray(0, MAX_HEADER_LEN);
+    const success = !!header[0]; // First byte is 0 or 1.
+    // Convert buffer to string and eliminate padded null bytes (\0).
+    const msgId = header.subarray(1).toString("utf8").replace(/\0/g, "");
+    // Extract the payload (Everything from Byte 64 onwards)
+    const message: Buffer = payload.subarray(MAX_HEADER_LEN);
+
+    // 2. Resolve / reject the response message back to the requester.
+    const request: ApiCall | undefined = this.polReqs.get(msgId);
+    this.polReqs.delete(msgId);
+    if (request?.promise) {
+      if (success) {
+        this.logger.debug(`${FOLLOW_UP}Success on <${msgId}>.`);
+        request.promise.resolve.call(this, { response: message, request });
+      } else {
+        this.logger.debug(`${FOLLOW_UP}Failed on <${msgId}>.`);
+        request.promise.reject.call(this, { err: message, request });
+      }
+    }
+  };
+
+  /**
+   * Handles incoming data on a peer-specific response channel.
+   * Parses the JSON API call and invokes the corresponding handler method.
+   *
+   * @param peer - The network peer that sent the data
+   * @param data - The data buffer containing the API call JSON
+   */
+  private _handleChannelResponse = ({
+    peer,
+    data,
+  }: {
+    peer: NetworkPeer;
+    data: string | Buffer;
+  }): void => {
+    if (!peer || !data) {
+      this.logger.debug(`Incomplete message received.`);
+      return;
+    }
+
+    try {
+      // Parse API path.
+      const json: ApiCall = JSON.parse(data.toString());
+      const apiPath = json.api
+        .split("/") // Split the path by "/".
+        .filter(Boolean); // Remove all "falsy" (false, 0, "", null, undefined, and NaN) elements.
+
+      // Find the corresponding API object from nested apiPath tiers.
+      let api: any = this.apis; // this.apis holds nested dynamic assigned functions.
+      for (const path of apiPath) {
+        if (!api || typeof api !== "object" || !(path in api)) {
+          this.logger.warn(`API not found: ${json.api}`);
+          return;
+        }
+        api = api[path];
+      }
+
+      // Make sure the api object is a function object.
+      if (typeof api !== "function") {
+        this.logger.warn(`Invalid API path: ${json.api}`);
+        return;
+      }
+      api.call(this, peer, json);
+    } catch (err) {
+      this.logger.warn(`Invalid request: Incorrect JSON format.\n${data}`);
+    }
+  };
+
+  /**
+   * Handle error situations of a request.
+   *
+   * @param err Error type.
+   * @param msg The request message.
+   * @param apiPath API path of the request.
+   * @returns AckValue for the error situation.
+   */
+  private _handleRequestError(
+    err: Error,
+    msg: string,
+    apiPath: string = UNKNOWN_ATTRIBUTE,
+  ): AckValue {
+    let errType: AckValue;
+    if (err instanceof SyntaxError) {
+      // Matches errors like "Unexpected token" or "Unexpected end of JSON input"
+      errType = AckValue.InvalidReqData;
+      this.logger.warn(`Invalid request: Incorrect JSON format.\n${msg}`);
+    } else if (err instanceof TypeError) {
+      // Matches errors if 'data' was null or undefined
+      errType = AckValue.InvalidReqData;
+      this.logger.warn(
+        `Invalid request: Data was null or incompatible: ${err.message}`,
+      );
+    } else {
+      errType = AckValue.Error;
+      if (err instanceof Error) {
+        this.logger.error(`Unexpected error on <${apiPath}>: ${err.message}`);
+      }
+    }
+    return errType;
+  }
+
+  /**
+   * Wraps _handleApiRequest with peer extraction for TCP server events.
+   *
+   * @param params - Object containing peer and data from TCP server event
+   */
+  private _handleTcpApiRequest = async ({
+    peer,
+    data,
+  }: {
+    peer: NetworkPeer;
+    data: string | Buffer;
+  }): Promise<void> => {
+    if (!peer || !data) {
+      this.logger.debug(`Incomplete message received.`);
+      return;
+    }
+    await this._handleApiRequest(data);
+  };
+
+  /**
+   * Initializes OpenTelemetry tracer and metrics.
+   * Replaces default ProviderState with OtelProviderState if needed.
+   */
+  private async _initializeOtel(): Promise<void> {
+    // Use OtelProviderState instead of the default ProviderState.
+    const providerInfo = this._providerState.getProvider();
+    let otelProvider: OtelProviderState;
+    if (this._providerState instanceof OtelProviderState) {
+      otelProvider = this._providerState;
+    } else {
+      // Replace the default ProviderState instance by OtelProviderState instance.
+      const state = this._providerState.getState();
+      otelProvider = new OtelProviderState(providerInfo);
+      otelProvider.setState(state);
+      this._providerState = otelProvider;
+    }
+
+    const providerId = this.configManager.getProviderId();
+    this.tracer = OtelTracer.getInstance(providerId, otelProvider);
+
+    const { enabled, ...info } = providerInfo;
+    const resourceAttr: DetectedResourceAttributes = { ...info };
+    this.metrics = new OtelMeterics(resourceAttr, otelProvider);
+  }
+
+  /**
+   * Initializes resources including OpenTelemetry, TCP servers, and subclass resources.
+   * Sets up the response channel and marks provider as initialized.
+   */
+  private async _initializeResources(): Promise<void> {
+    this.logger.debug(`Initializing ${this.getIdentity()} ...`);
+    this.setState(ExecutionState.Initializing);
+
+    const jobs: Promise<any>[] = [];
+    jobs.push(this._initializeOtel());
+    jobs.push(this.getTaskTcpServer(ProviderTask.ChannelResponse));
+    const result = await Promise.all(jobs);
+    if (result.length > 1) this.setResponseChannel(true);
+
+    this.logger.debug(`Initializing resources in subclass ...`);
+    this.initializeApiFunctionMap();
+    await this.initializingResources();
+    this.logger.debug(`${FOLLOW_UP}Subclass resources initialized.`);
+
+    this._initialized = true;
+    this.logger.debug(`${this.getIdentity()} initialized.`);
+  }
+
+  /**
+   * Parses an API call request to extract the handler function and API spec.
+   *
+   * @param apiCall - The API call to parse
+   * @returns Object with api handler function and apiSpec, or undefined if not found
+   */
+  private _parseRequest(
+    apiCall: ApiCall,
+  ): { api?: Function; apiName?: string; apiSpec: ApiSpec } | undefined {
+    const from = this.getPeerId(apiCall);
+    this.logger.debug(`Request ${from}:<${apiCall.api}> received.`);
+
+    const apiPath = apiCall.api
+      .split("/") // Split the path by "/".
+      .filter(Boolean); // Remove all "falsy" (false, 0, "", null, undefined, and NaN) elements.
+
+    // Get the handler function for this request.
+    let api: any = this.apis; // this.apis holds nested dynamic assigned functions.
+    let apiSpec: any = this.PROTOCOL.apis;
+
+    // Handle system instructions which in the form of /sys/instruction.
+    if (apiPath.length == 2 && apiPath[0] === "sys") {
+      const apiName = apiPath[1];
+      apiSpec = {
+        request: "string",
+        response: "boolean",
+        ack: AckType.Single,
+      };
+      return { apiName, apiSpec };
+    }
+
+    // For other service specific APIs.
+    for (const path of apiPath) {
+      if (!api || typeof api !== "object" || !(path in api)) {
+        this.logger.warn(`API not found: ${apiCall.api}`);
+        return;
+      }
+      api = api[path];
+      apiSpec = apiSpec[path];
+    }
+
+    if (typeof api !== "function") {
+      this.logger.warn(`Invalid API path: ${apiCall.api}`);
+      return;
+    }
+    return { api, apiSpec };
+  }
+
+  /**
+   * Releases OpenTelemetry resources (metrics and tracer).
+   */
+  private async _releaseOtel(): Promise<void> {
+    const promises = [];
+    if (this.metrics) {
+      promises.push(this.metrics.shutdown());
+    }
+    if (this.tracer) {
+      const providerId = this.configManager.getProviderId();
+      promises.push(OtelTracer.getInstance(providerId).shutdown());
+    }
+
+    await Promise.all(promises);
+    this.metrics = undefined as unknown as OtelMeterics;
+    this.tracer = undefined as unknown as OtelTracer;
+  }
+
+  /**
+   * Releases all response channels (TCP clients) in the chnResp pool.
+   * Stops each channel and removes it from the registry.
+   *
+   * @throws Error if any channels cannot be released
+   */
+  private async _releaseResponseChannels(): Promise<void> {
+    this.logger.debug(`Release response channels ...`);
+    // this.chnResp is in the { service: { instance: TcpClient }} format.
+    // 1. Iterate through the services.
+    for (const [service, instances] of Object.entries(this.chnResp)) {
+      // 2. Iterate through the instances within the service.
+      for (const [instId, channel] of Object.entries(instances)) {
+        // 3. Stop the channel.
+        channel.off(NetworkEvent.Data, this._handleChannelResponse);
+        await channel.stop();
+        delete this.chnResp[service][instId];
+        this.logger.debug(
+          `${FOLLOW_UP}<${service}-${instId}> response channel released.`,
+        );
+      }
+      if (Object.keys(this.chnResp[service]).length === 0) {
+        delete this.chnResp[service];
+      }
+    }
+
+    if (Object.keys(this.chnResp).length > 0) {
+      throw new Error(
+        "Unable to release some resources on the response channel pool.",
+      );
+    }
+    this.logger.debug(`${FOLLOW_UP}All response channels are released.`);
+  }
+
+  /**
+   * Updates the ConfigManager and syncs provider information.
+   *
+   * @param configManager - The new ConfigManager instance
+   */
+  private _setConfigManager(configManager: ConfigManager) {
+    this.configManager = configManager;
+    this.logger = configManager.getLogger();
+    this._updateProviderInfo();
+
+    const providerInfo = this.collectInstanceInfo();
+    if (!this._providerState) {
+      this._providerState = new ProviderState(providerInfo);
+    } else {
+      this._providerState.setProvider(providerInfo);
+    }
+  }
+
+  /**
+   * Updates API call counter statistics based on error type.
+   *
+   * @param errType - The type of error that occurred
+   * @param json - The API call object
+   */
+  private _updateApiCounter(errType: AckValue, json: ApiCall) {
+    // Update API counter statistics
+    if (json?.api) {
+      const apiPath = json.api;
+      let counter = this._apiCounter.get(apiPath);
+      if (!counter) {
+        counter = {
+          success: 0,
+          invalidRequest: 0,
+          failedOnProcess: 0,
+        };
+        this._apiCounter.set(apiPath, counter);
+      }
+
+      // Increment appropriate counter based on error type
+      if (errType === AckValue.InvalidReqData) {
+        counter.invalidRequest++;
+      } else if (errType === AckValue.Error) {
+        counter.failedOnProcess++;
+      } else if (errType === AckValue.None) {
+        counter.success++;
+      }
+    }
+  }
+
+  /**
+   * Updates provider information in protocol and config.
+   * Syncs instance ID and service name between protocol and config.
+   */
+  private _updateProviderInfo() {
+    // Synchronize provider's instance ID.
+    const coreConfig = this.configManager.getCoreConfig();
+    coreConfig.provider_id = this.PROTOCOL.provider.id;
+
+    const svcName = coreConfig.service_name;
+    if (svcName && svcName !== UNKNOWN_ATTRIBUTE) {
+      // If service name is defined in config file, use it.
+      this.PROTOCOL.provider.name = svcName;
+    } else {
+      // Otherwise, set the service_name in the core configuration to the class name.
+      coreConfig.service_name = this.PROTOCOL.provider.name;
+    }
+  }
+}

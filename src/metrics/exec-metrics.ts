@@ -3,10 +3,8 @@
  * @module exec-metrics
  */
 
-import { inject, injectable } from "inversify";
-
-import { TYPES } from "../aop/di-types";
-import { LoggerManager } from "../common/logger";
+import { injectable } from "inversify";
+import { Logger } from "winston";
 
 /**
  * Execution metrics recorder for tracking method performance and reliability.
@@ -20,7 +18,6 @@ import { LoggerManager } from "../common/logger";
  * - Method execution time tracking
  * - Success/failure rate recording
  * - Logging-based metrics (no external dependencies)
- * - Integration with LoggerManager
  * - Configurable logging levels
  *
  * @remarks
@@ -31,7 +28,7 @@ import { LoggerManager } from "../common/logger";
  *
  * @example
  * ```typescript
- * const metrics = new ExecutionMetrics(loggerManager);
+ * const metrics = new ExecutionMetrics(this.logger);
  *
  * // Record successful execution
  * metrics.recordExecutionTime("UserService", "createUser", 150.5, true);
@@ -45,17 +42,17 @@ import { LoggerManager } from "../common/logger";
  */
 @injectable()
 export class ExecutionMetrics {
-  private readonly _logger!: ReturnType<LoggerManager["getLogger"]>;
+  private readonly _logger: Logger;
 
   /**
    * Creates an ExecutionMetrics instance.
-   *
-   * @param loggerManager - The logger manager for obtaining the application logger.
    */
-  constructor(
-    @inject(TYPES.LoggerManager) loggerManager: LoggerManager | null = null,
-  ) {
-    this._logger = loggerManager?.getLogger() ?? (console as any); // Fallback to console if no loggerManager.
+  constructor(logger: Logger) {
+    this._logger = logger ?? (console as any); // Fallback to console if no Logger.
+  }
+
+  public getLogger(): Logger {
+    return this._logger;
   }
 
   /**

@@ -1,16 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SpanKind, SpanStatusCode, Span } from "@opentelemetry/api";
 import { DEFAULT_DISCOVERY_PORT } from "../../common/config";
+import { OtelTracer } from "../../metrics/otel-tracing";
+import { generateCorrelationId } from "../../metrics/otel-resource";
 import {
-  OtelTracing,
-  OtelTracer,
-  ServerStateSpan,
-  generateCorrelationId,
-  traceMethod,
-  traceable,
-  SpanAttributeValue,
-} from "../../metrics/otel-tracing";
-import { ServerState, UNKNOWN_ATTRIBUTE } from "../../types/basal-protocol";
+  ProviderState,
+  ProviderAttributeValue,
+} from "../../provider/provider-info";
+import {
+  ExecutionState,
+  UNKNOWN_ATTRIBUTE,
+  NetworkProtocol,
+} from "../../types/basal-protocol";
+import { NetworkDirection } from "../../network/network-events";
 
 vi.mock("@opentelemetry/api", async () => {
   const actual = await import("@opentelemetry/api");
@@ -32,200 +34,297 @@ vi.mock("@opentelemetry/api", async () => {
   };
 });
 
-describe("SpanAttributeValue", () => {
+describe("ProviderAttributeValue", () => {
   it("should accept string values", () => {
-    const value: SpanAttributeValue = "test-string";
+    const value: ProviderAttributeValue = "test-string";
     expect(value).toBe("test-string");
   });
 
   it("should accept number values", () => {
-    const value: SpanAttributeValue = 42;
+    const value: ProviderAttributeValue = 42;
     expect(value).toBe(42);
   });
 
   it("should accept boolean values", () => {
-    const value: SpanAttributeValue = true;
+    const value: ProviderAttributeValue = true;
     expect(value).toBe(true);
   });
 });
 
-describe("ServerStateSpan", () => {
+describe("ProviderState", () => {
+  let providerState: ProviderState;
+
   beforeEach(() => {
-    ServerStateSpan.setState(
-      ServerState.Stopped,
-      UNKNOWN_ATTRIBUTE,
-      UNKNOWN_ATTRIBUTE,
-    );
+    const defaultProvider = {
+      enabled: true,
+      "service.name": UNKNOWN_ATTRIBUTE,
+      "service.instance": UNKNOWN_ATTRIBUTE,
+      "service.version": UNKNOWN_ATTRIBUTE,
+      "protocol.version": UNKNOWN_ATTRIBUTE,
+      "deployment.environment": UNKNOWN_ATTRIBUTE,
+    };
+    providerState = new ProviderState(defaultProvider);
+    providerState.setState(ExecutionState.Stopped);
   });
 
   describe("setState", () => {
-    it("should set the server state", () => {
-      ServerStateSpan.setState(ServerState.Listening, "TestService", "inst-1");
-      expect(ServerStateSpan.getState()).toBe(ServerState.Listening);
+    it("should set the provider state", () => {
+      providerState.setState(ExecutionState.Listening);
+      expect(providerState.getState()).toBe(ExecutionState.Listening);
     });
 
-    it("should update service name when provided", () => {
-      ServerStateSpan.setState(ServerState.Stopped, "NewService", undefined);
-      const attrs = ServerStateSpan.getCommonAttributes();
-      expect(attrs["service.name"]).toBe("NewService");
+    it("should update state to running", () => {
+      providerState.setState(ExecutionState.Running);
+      expect(providerState.getState()).toBe(ExecutionState.Running);
     });
 
-    it("should update service id when provided", () => {
-      ServerStateSpan.setState(ServerState.Stopped, undefined, "new-id");
-      const attrs = ServerStateSpan.getCommonAttributes();
-      expect(attrs["service.instance.id"]).toBe("new-id");
+    it("should update state to starting", () => {
+      providerState.setState(ExecutionState.Starting);
+      expect(providerState.getState()).toBe(ExecutionState.Starting);
     });
 
-    it("should update both service name and id", () => {
-      ServerStateSpan.setState(
-        ServerState.Starting,
-        "OrderService",
-        "order-svc-1",
-      );
-      const attrs = ServerStateSpan.getCommonAttributes();
-      expect(attrs["service.name"]).toBe("OrderService");
-      expect(attrs["service.instance.id"]).toBe("order-svc-1");
+    it("should update state to stopped", () => {
+      providerState.setState(ExecutionState.Stopped);
+      expect(providerState.getState()).toBe(ExecutionState.Stopped);
     });
   });
 
   describe("getState", () => {
-    it("should return the current server state", () => {
-      ServerStateSpan.setState(ServerState.Listening);
-      expect(ServerStateSpan.getState()).toBe(ServerState.Listening);
+    it("should return the current provider state", () => {
+      providerState.setState(ExecutionState.Listening);
+      expect(providerState.getState()).toBe(ExecutionState.Listening);
     });
 
     it("should return Stopped initially", () => {
-      ServerStateSpan.setState(
-        ServerState.Stopped,
-        UNKNOWN_ATTRIBUTE,
-        UNKNOWN_ATTRIBUTE,
-      );
-      expect(ServerStateSpan.getState()).toBe(ServerState.Stopped);
+      const defaultProvider = {
+        enabled: true,
+        "service.name": UNKNOWN_ATTRIBUTE,
+        "service.instance": UNKNOWN_ATTRIBUTE,
+        "service.version": UNKNOWN_ATTRIBUTE,
+        "protocol.version": UNKNOWN_ATTRIBUTE,
+        "deployment.environment": UNKNOWN_ATTRIBUTE,
+      };
+      const newProviderState = new ProviderState(defaultProvider);
+      expect(newProviderState.getState()).toBe(ExecutionState.Stopped);
     });
   });
 
   describe("getCommonAttributes", () => {
-    it("should return attributes with service information", () => {
-      ServerStateSpan.setState(ServerState.Listening, "TestService", "test-id");
-      const attrs = ServerStateSpan.getCommonAttributes();
-      expect(attrs["service.name"]).toBe("TestService");
-      expect(attrs["service.instance.id"]).toBe("test-id");
-      expect(attrs["server.state"]).toBe(ServerState.Listening);
+    it("should return attributes with provider information", () => {
+      const customProvider = {
+        enabled: true,
+        "service.name": "TestService",
+        "service.instance": "test-id",
+        "service.version": "1.0.0",
+        "protocol.version": "1.0",
+        "deployment.environment": "test",
+      };
+      const customProviderState = new ProviderState(customProvider);
+      customProviderState.setState(ExecutionState.Listening);
+      const attrs = customProviderState.getCommonAttributes();
+      expect(attrs["provider.identity"]).toBe("TestService-test-id");
+      expect(attrs["service.state"]).toBe(ExecutionState.Listening);
     });
 
     it("should return all attribute types", () => {
-      ServerStateSpan.setState(ServerState.Running, "Service", "id");
-      const attrs = ServerStateSpan.getCommonAttributes();
-      expect(typeof attrs["service.name"]).toBe("string");
-      expect(typeof attrs["service.instance.id"]).toBe("string");
-      expect(typeof attrs["server.state"]).toBe("string");
+      const customProvider = {
+        enabled: true,
+        "service.name": "Service",
+        "service.instance": "id",
+        "service.version": "1.0.0",
+        "protocol.version": "1.0",
+        "deployment.environment": "test",
+      };
+      const customProviderState = new ProviderState(customProvider);
+      customProviderState.setState(ExecutionState.Running);
+      const attrs = customProviderState.getCommonAttributes();
+      expect(typeof attrs["provider.identity"]).toBe("string");
+      expect(typeof attrs["service.state"]).toBe("string");
+    });
+  });
+
+  describe("getProvider", () => {
+    it("should return the provider info", () => {
+      const customProvider = {
+        enabled: true,
+        "service.name": "TestService",
+        "service.instance": "test-id",
+        "service.version": "1.0.0",
+        "protocol.version": "1.0",
+        "deployment.environment": "test",
+      };
+      const customProviderState = new ProviderState(customProvider);
+      expect(customProviderState.getProvider()["service.name"]).toBe(
+        "TestService",
+      );
+      expect(customProviderState.getProvider()["service.instance"]).toBe(
+        "test-id",
+      );
+    });
+  });
+
+  describe("getProviderIdentity", () => {
+    it("should return the provider identity string", () => {
+      const customProvider = {
+        enabled: true,
+        "service.name": "OrderService",
+        "service.instance": "order-svc-1",
+        "service.version": "1.0.0",
+        "protocol.version": "1.0",
+        "deployment.environment": "test",
+      };
+      const customProviderState = new ProviderState(customProvider);
+      expect(customProviderState.getProviderIdentity()).toBe(
+        "OrderService-order-svc-1",
+      );
     });
   });
 });
 
-describe("OtelTracing", () => {
+describe("OtelTracer", () => {
+  let otelTracer: OtelTracer;
+
   beforeEach(() => {
-    OtelTracing.configure({
-      serviceName: "test-service",
-      serviceVersion: "1.0.0",
-      serviceInstanceId: "test-instance",
+    const defaultProvider = {
       enabled: true,
+      "service.name": "test-service",
+      "service.instance": "test-instance",
+      "service.version": "1.0.0",
+      "protocol.version": "1.0",
+      "deployment.environment": "test",
+    };
+    const providerState = new ProviderState(defaultProvider);
+    otelTracer = new OtelTracer(providerState);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe("getInstance", () => {
+    it("should return the same instance for same providerId", () => {
+      const defaultProvider = {
+        enabled: true,
+        "service.name": "test-service",
+        "service.instance": "test-instance",
+        "service.version": "1.0.0",
+        "protocol.version": "1.0",
+        "deployment.environment": "test",
+      };
+      const providerState = new ProviderState(defaultProvider);
+      const instance1 = OtelTracer.getInstance("provider-1", providerState);
+      const instance2 = OtelTracer.getInstance("provider-1", providerState);
+      expect(instance1).toBe(instance2);
+    });
+
+    it("should return different instances for different providerIds", () => {
+      const defaultProvider = {
+        enabled: true,
+        "service.name": "test-service",
+        "service.instance": "test-instance",
+        "service.version": "1.0.0",
+        "protocol.version": "1.0",
+        "deployment.environment": "test",
+      };
+      const providerState = new ProviderState(defaultProvider);
+      const instance1 = OtelTracer.getInstance("provider-1", providerState);
+      const instance2 = OtelTracer.getInstance("provider-2", providerState);
+      expect(instance1).not.toBe(instance2);
     });
   });
 
-  describe("configure", () => {
-    it("should set configuration correctly", () => {
-      expect(OtelTracing.getServiceName()).toBe("test-service");
-      expect(OtelTracing.getServiceInstanceId()).toBe("test-instance");
-    });
-
-    it("should use default values for missing config", () => {
-      OtelTracing.configure({ serviceName: "custom" });
-      expect(OtelTracing.getServiceName()).toBe("custom");
+  describe("getProviderIdentity", () => {
+    it("should return the configured provider identity", () => {
+      expect(otelTracer.getProviderIdentity()).toBe(
+        "test-service-test-instance",
+      );
     });
   });
 
-  describe("getServiceName", () => {
-    it("should return the configured service name", () => {
-      expect(OtelTracing.getServiceName()).toBe("test-service");
-    });
-  });
-
-  describe("getServiceInstanceId", () => {
-    it("should return the configured service instance id", () => {
-      expect(OtelTracing.getServiceInstanceId()).toBe("test-instance");
+  describe("getProviderState", () => {
+    it("should return the provider state", () => {
+      const state = otelTracer.getProviderState();
+      expect(state).toBeDefined();
+      expect(state.getProvider()["service.name"]).toBe("test-service");
     });
   });
 
   describe("createSpan", () => {
     it("should create a span with correct name", () => {
-      const span = OtelTracing.createSpan("test-operation");
+      const span = otelTracer.createSpan("test-operation");
       expect(span).toBeDefined();
     });
 
-    it("should include service attributes in span", () => {
-      const span = OtelTracing.createSpan("test-operation");
+    it("should include provider attributes in span", () => {
+      const span = otelTracer.createSpan("test-operation");
       expect(span).toBeDefined();
     });
 
     it("should apply custom kind when provided", () => {
-      const span = OtelTracing.createSpan("test-operation", {
+      const span = otelTracer.createSpan("test-operation", {
         kind: SpanKind.CLIENT,
       });
       expect(span).toBeDefined();
     });
 
     it("should include custom attributes", () => {
-      const attrs: Record<string, SpanAttributeValue> = {
+      const attrs: Record<string, ProviderAttributeValue> = {
         "custom.attr": "value",
         "numeric.attr": 42,
       };
-      const span = OtelTracing.createSpan("test-operation", {
+      const span = otelTracer.createSpan("test-operation", {
         attributes: attrs,
       });
       expect(span).toBeDefined();
     });
 
     it("should create disabled span when enabled is false", () => {
-      OtelTracing.configure({ enabled: false });
-      const span = OtelTracing.createSpan("disabled-operation");
+      const disabledProvider = {
+        enabled: false,
+        "service.name": "disabled-service",
+        "service.instance": "disabled-instance",
+        "service.version": "1.0.0",
+        "protocol.version": "1.0",
+        "deployment.environment": "test",
+      };
+      const disabledState = new ProviderState(disabledProvider);
+      const disabledTracer = new OtelTracer(disabledState);
+      const span = disabledTracer.createSpan("disabled-operation");
       expect(span).toBeDefined();
     });
   });
 
   describe("createNetworkSpan", () => {
-    it("should create network span with tcp type", () => {
-      const span = OtelTracing.createNetworkSpan("connect", "tcp", {
+    it("should create network span", () => {
+      const span = otelTracer.createNetworkSpan("connect", {
         address: "127.0.0.1",
         port: 8080,
+        protocol: NetworkProtocol.TCP,
       });
       expect(span).toBeDefined();
     });
 
-    it("should create network span with udp type", () => {
-      const span = OtelTracing.createNetworkSpan("broadcast", "udp");
-      expect(span).toBeDefined();
-    });
-
-    it("should create network span with broadcast type", () => {
-      const span = OtelTracing.createNetworkSpan("discover", "broadcast");
+    it("should create network span with udp protocol", () => {
+      const span = otelTracer.createNetworkSpan("broadcast", {
+        protocol: NetworkProtocol.UDP,
+      });
       expect(span).toBeDefined();
     });
 
     it("should set direction to outbound when specified", () => {
-      const span = OtelTracing.createNetworkSpan("send", "tcp", {
-        direction: "outbound",
+      const span = otelTracer.createNetworkSpan("send", {
+        direction: NetworkDirection.Out,
       });
       expect(span).toBeDefined();
     });
 
     it("should default direction to inbound", () => {
-      const span = OtelTracing.createNetworkSpan("receive", "udp");
+      const span = otelTracer.createNetworkSpan("receive", {});
       expect(span).toBeDefined();
     });
 
     it("should include address and port when provided", () => {
-      const span = OtelTracing.createNetworkSpan("connect", "tcp", {
+      const span = otelTracer.createNetworkSpan("connect", {
         address: "192.168.1.1",
         port: 3000,
       });
@@ -235,19 +334,19 @@ describe("OtelTracing", () => {
 
   describe("createBroadcastSpan", () => {
     it("should create broadcast span for discovery", () => {
-      const span = OtelTracing.createBroadcastSpan("discover");
+      const span = otelTracer.createBroadcastSpan("discover");
       expect(span).toBeDefined();
     });
 
     it("should include message when provided", () => {
-      const span = OtelTracing.createBroadcastSpan("announce", {
+      const span = otelTracer.createBroadcastSpan("announce", {
         message: "hello",
       });
       expect(span).toBeDefined();
     });
 
     it("should include network address when provided", () => {
-      const span = OtelTracing.createBroadcastSpan("discover", {
+      const span = otelTracer.createBroadcastSpan("discover", {
         address: "192.168.1.255",
         port: DEFAULT_DISCOVERY_PORT,
       });
@@ -255,7 +354,7 @@ describe("OtelTracing", () => {
     });
 
     it("should include custom attributes", () => {
-      const span = OtelTracing.createBroadcastSpan("custom", {
+      const span = otelTracer.createBroadcastSpan("custom", {
         attributes: { "custom.field": "value" },
       });
       expect(span).toBeDefined();
@@ -270,7 +369,7 @@ describe("OtelTracing", () => {
       } as unknown as Span;
 
       const error = new Error("Test error");
-      OtelTracing.recordException(mockSpan, error);
+      otelTracer.recordException(mockSpan, error);
 
       expect(mockSpan.recordException).toHaveBeenCalledWith(error);
       expect(mockSpan.setStatus).toHaveBeenCalled();
@@ -283,7 +382,7 @@ describe("OtelTracing", () => {
       } as unknown as Span;
 
       const error = new Error("Test error message");
-      OtelTracing.recordException(mockSpan, error);
+      otelTracer.recordException(mockSpan, error);
 
       expect(mockSpan.setStatus).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -294,45 +393,25 @@ describe("OtelTracing", () => {
     });
   });
 
-  describe("setServerState", () => {
-    it("should update server state in ServerStateSpan", () => {
-      OtelTracing.setServerState(ServerState.Listening, "Service", "id");
-      expect(ServerStateSpan.getState()).toBe(ServerState.Listening);
-    });
-  });
-});
-
-describe("OtelTracer", () => {
-  beforeEach(() => {
-    OtelTracer.initialize({
-      serviceName: "tracer-test-service",
-      serviceVersion: "2.0.0",
-    });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  describe("initialize", () => {
-    it("should initialize tracing with config", () => {
-      expect(OtelTracer.isInitialized()).toBe(true);
-      expect(OtelTracing.getServiceName()).toBe("tracer-test-service");
-    });
-
-    it("should only initialize once", () => {
-      const initialState = OtelTracer.isInitialized();
-      OtelTracer.initialize({
-        serviceName: "another-service",
-      });
-      expect(OtelTracer.isInitialized()).toBe(initialState);
-      expect(OtelTracing.getServiceName()).toBe("tracer-test-service");
+  describe("configure", () => {
+    it("should reconfigure the tracer with new provider state", () => {
+      const newProvider = {
+        enabled: true,
+        "service.name": "new-service",
+        "service.instance": "new-instance",
+        "service.version": "2.0.0",
+        "protocol.version": "2.0",
+        "deployment.environment": "production",
+      };
+      const newProviderState = new ProviderState(newProvider);
+      otelTracer.configure(newProviderState);
+      expect(otelTracer.getProviderIdentity()).toBe("new-service-new-instance");
     });
   });
 
-  describe("isInitialized", () => {
-    it("should return true after initialization", () => {
-      expect(OtelTracer.isInitialized()).toBe(true);
+  describe("shutdown", () => {
+    it("should shutdown the tracer", async () => {
+      await expect(otelTracer.shutdown()).resolves.not.toThrow();
     });
   });
 });
@@ -368,95 +447,31 @@ describe("generateCorrelationId", () => {
   });
 });
 
-describe("traceMethod decorator", () => {
-  it("should return a function from decorator", () => {
-    const decorator = traceMethod();
-    expect(typeof decorator).toBe("function");
-  });
-
-  it("should accept name parameter", () => {
-    const decorator = traceMethod("test-name");
-    expect(typeof decorator).toBe("function");
-  });
-
-  it("should accept options with kind", () => {
-    const decorator = traceMethod("test", { kind: SpanKind.CLIENT });
-    expect(typeof decorator).toBe("function");
-  });
-
-  it("should accept options with attributes", () => {
-    const decorator = traceMethod("test", {
-      attributes: { "test.attr": "value" },
-    });
-    expect(typeof decorator).toBe("function");
-  });
-
-  it("should accept both name and options", () => {
-    const decorator = traceMethod("custom", { kind: SpanKind.SERVER });
-    expect(typeof decorator).toBe("function");
-  });
-});
-
-describe("traceable decorator", () => {
-  it("should return a function from decorator", () => {
-    const decorator = traceable("test-component");
-    expect(typeof decorator).toBe("function");
-  });
-
-  it("should accept component name parameter", () => {
-    const decorator = traceable("my-component");
-    expect(typeof decorator).toBe("function");
-  });
-
-  it("should modify class instance when applied", () => {
-    const TestClass = traceable("test")(
-      class {
-        value = "test";
-      } as any,
-    );
-
-    const InstanceClass = TestClass as any;
-    const instance = new InstanceClass();
-    expect(instance.__componentName).toBe("test");
-    expect(instance.__instrumented).toBe(true);
-  });
-
-  it("should preserve class name when using named class", () => {
-    const TestClass = traceable("test")(class TestClass {}) as any;
-
-    expect(TestClass.name).toBe("TestClass");
-  });
-
-  it("should support constructor arguments", () => {
-    const TestClass = traceable("test")(
-      class TestClass {
-        constructor(public value: string) {}
-      },
-    ) as any;
-
-    const instance = new TestClass("test-value");
-    expect(instance.value).toBe("test-value");
-    expect(instance.__componentName).toBe("test");
-  });
-});
-
 describe("Integration tests", () => {
+  let otelTracer: OtelTracer;
+  let providerState: ProviderState;
+
   beforeEach(() => {
-    OtelTracing.configure({
-      serviceName: "integration-test",
-      serviceVersion: "1.0.0",
-      serviceInstanceId: "int-id",
+    const defaultProvider = {
       enabled: true,
-    });
+      "service.name": "integration-test",
+      "service.instance": "int-id",
+      "service.version": "1.0.0",
+      "protocol.version": "1.0",
+      "deployment.environment": "test",
+    };
+    providerState = new ProviderState(defaultProvider);
+    otelTracer = new OtelTracer(providerState);
   });
 
   it("should create spans for various operations", () => {
-    const span1 = OtelTracing.createSpan("operation-1");
-    const span2 = OtelTracing.createNetworkSpan("connect", "tcp", {
+    const span1 = otelTracer.createSpan("operation-1");
+    const span2 = otelTracer.createNetworkSpan("connect", {
       address: "127.0.0.1",
       port: 8080,
+      protocol: NetworkProtocol.TCP,
     });
-    const span3 = OtelTracing.createBroadcastSpan("discover");
+    const span3 = otelTracer.createBroadcastSpan("discover");
 
     expect(span1).toBeDefined();
     expect(span2).toBeDefined();
@@ -464,19 +479,14 @@ describe("Integration tests", () => {
   });
 
   it("should track state changes across operations", () => {
-    ServerStateSpan.setState(ServerState.Stopped, "stopped-svc", "stopped-id");
-    expect(ServerStateSpan.getState()).toBe(ServerState.Stopped);
+    providerState.setState(ExecutionState.Stopped);
+    expect(providerState.getState()).toBe(ExecutionState.Stopped);
 
-    ServerStateSpan.setState(
-      ServerState.Listening,
-      "listening-svc",
-      "listening-id",
-    );
-    expect(ServerStateSpan.getState()).toBe(ServerState.Listening);
+    providerState.setState(ExecutionState.Listening);
+    expect(providerState.getState()).toBe(ExecutionState.Listening);
 
-    const attrs = ServerStateSpan.getCommonAttributes();
-    expect(attrs["service.name"]).toBe("listening-svc");
-    expect(attrs["server.state"]).toBe(ServerState.Listening);
+    const attrs = providerState.getCommonAttributes();
+    expect(attrs["service.state"]).toBe(ExecutionState.Listening);
   });
 
   it("should generate traceable correlation IDs", () => {
@@ -493,7 +503,7 @@ describe("Integration tests", () => {
       setStatus: vi.fn(),
     } as unknown as Span;
 
-    OtelTracing.recordException(mockSpan, new Error("test error"));
+    otelTracer.recordException(mockSpan, new Error("test error"));
 
     expect(mockSpan.recordException).toHaveBeenCalled();
     expect(mockSpan.setStatus).toHaveBeenCalledWith(
@@ -504,19 +514,19 @@ describe("Integration tests", () => {
   });
 
   it("should support various span kinds", () => {
-    const internalSpan = OtelTracing.createSpan("internal", {
+    const internalSpan = otelTracer.createSpan("internal", {
       kind: SpanKind.INTERNAL,
     });
-    const serverSpan = OtelTracing.createSpan("server", {
+    const serverSpan = otelTracer.createSpan("server", {
       kind: SpanKind.SERVER,
     });
-    const clientSpan = OtelTracing.createSpan("client", {
+    const clientSpan = otelTracer.createSpan("client", {
       kind: SpanKind.CLIENT,
     });
-    const producerSpan = OtelTracing.createSpan("producer", {
+    const producerSpan = otelTracer.createSpan("producer", {
       kind: SpanKind.PRODUCER,
     });
-    const consumerSpan = OtelTracing.createSpan("consumer", {
+    const consumerSpan = otelTracer.createSpan("consumer", {
       kind: SpanKind.CONSUMER,
     });
 

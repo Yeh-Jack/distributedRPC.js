@@ -5,43 +5,60 @@
 
 import "reflect-metadata";
 import { Container } from "inversify";
-import { Logger } from "winston";
+import { ConsoleSpanExporter } from "@opentelemetry/sdk-trace-node";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc";
 
 import { TYPES } from "./di-types";
 import { ConfigManager } from "../common/config";
-import { LoggerManager } from "../common/logger";
+import { DefaultIdGenerator } from "../common/id-generator";
 import { ExecutionMetrics } from "../metrics/exec-metrics";
 import { instrumentService } from "../aop/exec-time-interceptor";
 
 import { BroadcastUdpServer } from "../network/broadcast-udp-server";
-import { ServiceManager } from "../manager/service-manager";
+import { ServiceProvider } from "../provider/service-provider";
 import { TcpServer } from "../network/tcp-server";
+import { UdpDiscovery } from "../network/udp-discovery";
 import { UdpServer } from "../network/udp-server";
+import { AppEnv, IdGenerator } from "../types/basal-protocol";
+import {
+  DiscoverProcedure,
+  RegisterProcedure,
+  ReportProcedure,
+} from "../procedure";
 
 export { TYPES };
 
 /**
  * Global InversifyJS container instance.
  * All application dependencies are registered and resolved through this container.
+ * Singletons are pre-bound for DiscoverProcedure, RegisterProcedure, and ReportProcedure.
  */
 export const container = new Container();
+
+// Bind IdGenerator as singleton using DefaultIdGenerator
+container
+  .bind<IdGenerator>(TYPES.IdGenerator)
+  .to(DefaultIdGenerator)
+  .inSingletonScope();
 
 /**
  * Creates a new named TCP server instance.
  * Use this factory function to acquire TCP server instances with specific names.
  *
+ * @param configManager - The configuration manager to use for this server
  * @param name - Unique identifier for the server instance
  * @returns A new TcpServer instance with the given name
  * @example
  * ```typescript
- * const tcpServer = createNamedTcpServer("my-server");
+ * const tcpServer = createNamedTcpServer(configManager, "my-server");
  * await tcpServer.start();
  * ```
  */
-export function createNamedTcpServer(name: string): TcpServer {
-  const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
-  const loggerManager = container.get<LoggerManager>(TYPES.LoggerManager);
-  return new TcpServer(configManager, loggerManager, name);
+export function createNamedTcpServer(
+  configManager: ConfigManager,
+  name: string,
+): TcpServer {
+  return new TcpServer(configManager, name);
 }
 
 /**
@@ -49,75 +66,99 @@ export function createNamedTcpServer(name: string): TcpServer {
  * Use this factory function to acquire UDP server instances with specific names.
  * For broadcast server, use name "broadcast" to get a BroadcastUdpServer.
  *
+ * @param configManager - The configuration manager to use for this server
  * @param name - Unique identifier for the server instance
  * @returns A new UdpServer instance with the given name, or BroadcastUdpServer if name is "broadcast"
  * @example
  * ```typescript
- * const udpServer = createNamedUdpServer("my-server");
+ * const udpServer = createNamedUdpServer(configManager, "my-server");
  * await udpServer.start();
  * ```
  */
 export function createNamedUdpServer(
+  configManager: ConfigManager,
   name: string,
   type: Symbol,
 ): UdpServer | BroadcastUdpServer {
-  const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
-  const loggerManager = container.get<LoggerManager>(TYPES.LoggerManager);
-
   if (type === TYPES.BroadcastUdpServer) {
-    return new BroadcastUdpServer(configManager, loggerManager, name);
+    return new BroadcastUdpServer(configManager, name);
   }
 
-  return new UdpServer(configManager, loggerManager, name);
+  return new UdpServer(configManager, name);
 }
 
 /**
- * Helper function to access the container within closures.
- * Required because Inversify's resolution context doesn't expose the container directly.
+ * Create OpenTelemetry exporter instance based on runtime environment.
+ * Returns `ConsoleSpanExporter` if it's `development`, otherwise returns
+ * `OTLPTraceExporter` instead.
+ *
+ * @param configManager - The configuration manager to use for determining the environment
  */
-function getContainer(): Container {
-  return container;
+export function createOtelExporter(configManager: ConfigManager) {
+  if (AppEnv.development === configManager.getAppEnv()) {
+    return new ConsoleSpanExporter();
+  } else {
+    const args = {
+      url: "http://localhost:4317",
+    };
+    return new OTLPTraceExporter(args);
+  }
 }
 
-// Bind ConfigManager
+/**
+ * Binds a service class to the container and returns a ready-to-use instance.
+ * The instance is activated via onActivation which reloads configuration and
+ * instruments the service with execution time metrics.
+ *
+ * @param serviceClass - The service class constructor to bind and instantiate.
+ * @returns Promise resolving to the activated service instance.
+ */
+export async function createProvider<T extends ServiceProvider>(
+  serviceClass: new (...args: any[]) => T,
+): Promise<T> {
+  container
+    .bind<T>(serviceClass)
+    .to(serviceClass)
+    .onActivation(async (_ctx, _instance) => {
+      await _instance.lifeCycle("reload");
+      const metrics = new ExecutionMetrics(_instance.getLogger());
+      return instrumentService(_instance, metrics);
+    });
+  return container.getAsync<T>(serviceClass);
+}
+
+/**
+ * Factory for creating UdpDiscovery instances bound to the DI container.
+ *
+ * @param configManager - The configuration manager for server settings.
+ * @param name - Unique identifier for the discovery instance.
+ * @param type - The DI binding type symbol (only UdpDiscovery is supported).
+ * @returns A new UdpDiscovery instance if type matches, otherwise undefined.
+ */
+export function createServiceManagerDiscover(
+  configManager: ConfigManager,
+  name: string,
+  type: Symbol,
+): UdpDiscovery | undefined {
+  if (type === TYPES.UdpDiscovery) {
+    return new UdpDiscovery(configManager, name);
+  }
+
+  return undefined;
+}
+
+// Bind procedure classes as singletons
 container
-  .bind<ConfigManager>(TYPES.ConfigManager)
-  .to(ConfigManager)
+  .bind<DiscoverProcedure>(TYPES.DiscoverProcedure)
+  .to(DiscoverProcedure)
   .inSingletonScope();
 
-// Bind LoggerManager with dependency on ConfigManager
 container
-  .bind<LoggerManager>(TYPES.LoggerManager)
-  .to(LoggerManager)
+  .bind<RegisterProcedure>(TYPES.RegisterProcedure)
+  .to(RegisterProcedure)
   .inSingletonScope();
 
-// Bind Logger (retrieved from LoggerManager)
-container.bind<Logger>(TYPES.Logger).toDynamicValue((ctx) => {
-  const container = getContainer();
-  const loggerManager = container.get<LoggerManager>(TYPES.LoggerManager);
-  return loggerManager.getLogger();
-});
-
-// Metrics singleton
-container.bind(ExecutionMetrics).toSelf().inSingletonScope();
-
-// Bind BroadcastUdpServer
 container
-  .bind<BroadcastUdpServer>(TYPES.BroadcastUdpServer)
-  .to(BroadcastUdpServer);
-
-// Bind TcpServer
-container.bind<TcpServer>(TYPES.TcpServer).to(TcpServer);
-
-// Bind UdpServer
-container.bind<UdpServer>(TYPES.UdpServer).to(UdpServer);
-
-// Service with DI-compatible instrumentation
-container
-  .bind<ServiceManager>(TYPES.ServiceManager)
-  .to(ServiceManager)
-  .onActivation((_ctx, instance) => {
-    const container = getContainer();
-    const metrics = container.get(ExecutionMetrics);
-    return instrumentService(instance, metrics);
-  });
+  .bind<ReportProcedure>(TYPES.ReportProcedure)
+  .to(ReportProcedure)
+  .inSingletonScope();

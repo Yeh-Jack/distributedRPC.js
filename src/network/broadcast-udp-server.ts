@@ -5,21 +5,14 @@
  */
 
 import { Socket as UdpSocket, RemoteInfo } from "dgram";
-import { inject, injectable } from "inversify";
+import { injectable } from "inversify";
 
 import { ConfigManager } from "../common/config";
-import { LoggerManager } from "../common/logger";
-import { TYPES } from "../aop/di-types";
 import { UdpServer } from "../network/udp-server";
-import {
-  BroadcastResponse,
-  ServerState,
-  PROBE_MESSAGE,
-} from "../types/basal-protocol";
-import {
-  OtelTracing,
-  generateCorrelationId,
-} from "../metrics/otel-tracing";
+import { PROBE_MESSAGE } from "../types/basal-protocol";
+import { BroadcastResponse260321 } from "../manager/api-spec-260321";
+import { OtelTracer } from "../metrics/otel-tracing";
+import { NetworkDirection } from "./network-events";
 import {
   udpBroadcastRequests,
   udpBroadcastResponses,
@@ -64,15 +57,14 @@ import {
  */
 @injectable()
 export class BroadcastUdpServer extends UdpServer {
-  private _managerInfo: BroadcastResponse | undefined = undefined;
+  private _managerInfo: BroadcastResponse260321 | undefined = undefined;
   private _responseBuffer!: Buffer;
 
   constructor(
-    @inject(TYPES.ConfigManager) configManager: ConfigManager,
-    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
+    configManager: ConfigManager,
     name: string = "broadcast-udp-server",
   ) {
-    super(configManager, loggerManager, name);
+    super(configManager, name);
   }
 
   /**
@@ -82,7 +74,7 @@ export class BroadcastUdpServer extends UdpServer {
    *
    * @param info The information of the ServiceManager.
    */
-  public setManagerInfo(info: BroadcastResponse) {
+  public setManagerInfo(info: BroadcastResponse260321) {
     this._managerInfo = info;
   }
 
@@ -113,37 +105,34 @@ export class BroadcastUdpServer extends UdpServer {
   // --------------------------------------------
 
   protected override handleMessage(msg: Buffer, rinfo: RemoteInfo): void {
+    const peerInfo = `<${rinfo.address}:${rinfo.port}>`;
     // Filter illegal message first.
-    if (msg.toString() !== PROBE_MESSAGE) return;
-
-    // Safe check.
-    const state = this.getState();
-    const socket: UdpSocket | undefined = this.getSocket();
-    if (!socket || state !== ServerState.Listening) {
-      const messge = `The ${this.getArrowedName()} broadcast server not running.`;
-      this.logger.error(messge);
-      throw new Error(messge);
+    const lenPrefix = PROBE_MESSAGE.length + 2; // Plus `->`
+    const prefix = msg.subarray(0, lenPrefix).toString();
+    if (prefix !== PROBE_MESSAGE + "->") {
+      this.logger.silly(`Non-discovery message received from ${peerInfo}.`);
+      return;
     }
 
     // Create distributed tracing span for the broadcast request
-    const correlationId = generateCorrelationId();
-    const discoverySpan = OtelTracing.createBroadcastSpan("discovery_request", {
-      message: "service_probe",
+    const socket: UdpSocket = this.getReadySocket();
+    const correlationId = msg.subarray(lenPrefix).toString();
+    const providerId = this.configManager.getProviderId();
+    const tracer = OtelTracer.getInstance(providerId);
+    const discoverySpan = tracer.createBroadcastSpan("discovery_received", {
+      message: msg.toString(),
       address: rinfo.address,
       port: rinfo.port,
-      direction: "inbound",
+      direction: NetworkDirection.In,
       attributes: {
         "correlation.id": correlationId,
-        "network.broadcast.source": `${rinfo.address}:${rinfo.port}`,
       },
     });
 
     const startTime = Date.now();
-
     try {
       // Doing things for the accepted message.
-      const sender = `<${rinfo.address}:${rinfo.port}>`;
-      this.logger.debug(`Received broadcast from ${sender}`);
+      this.logger.debug(`Received broadcast from ${peerInfo}`);
       super.handleMessage(msg, rinfo);
 
       // Record metrics
@@ -157,7 +146,7 @@ export class BroadcastUdpServer extends UdpServer {
         const responseTime = Date.now() - startTime;
 
         if (err) {
-          this.logger.error(`Error sending response to ${sender}: ${err}`);
+          this.logger.error(`Error sending response to ${peerInfo}: ${err}`);
           discoverySpan.recordException(err);
           discoverySpan.setStatus({
             code: 2, // ERROR
@@ -176,7 +165,7 @@ export class BroadcastUdpServer extends UdpServer {
           });
 
           this.logger.debug(
-            `Responded ${this._responseBuffer.length} bytes to ${sender}`,
+            `Responded ${this._responseBuffer.length} bytes to ${peerInfo}`,
           );
 
           discoverySpan.setStatus({

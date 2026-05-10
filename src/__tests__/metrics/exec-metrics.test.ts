@@ -43,13 +43,14 @@ describe("ExecutionMetrics", () => {
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
+        silly: vi.fn(),
       };
 
       mockLoggerManager = {
         getLogger: () => mockLogger,
       } as unknown as LoggerManager;
 
-      metrics = new ExecutionMetrics(mockLoggerManager);
+      metrics = new ExecutionMetrics(mockLogger);
     });
 
     it("should record successful execution time", () => {

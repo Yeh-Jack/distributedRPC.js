@@ -181,7 +181,7 @@ export class RetryScheduler {
   private _calculateDelay(): number {
     const baseDelay = this._options.interval;
     let delay = baseDelay;
-    if (this._options.backoff.enable) {
+    if (this._options.backoff.enabled) {
       const maxDelay = this._options.backoff.max_delay;
       let multiplier = this._options.backoff.multiplier;
       if (multiplier < 1) multiplier = DEFAULT_RETRY_MULTIPLIER; // Set to default if it's an illegal number.
@@ -196,7 +196,7 @@ export class RetryScheduler {
   }
 
   private _isExhausted(): boolean {
-    const maxtry = this._options.max_try;
+    const maxtry = this._options.max_retries;
     return (
       maxtry !== undefined &&
       maxtry > 0 && // Infinity retry if max_try is 0.

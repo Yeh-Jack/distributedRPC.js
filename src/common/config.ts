@@ -1,9 +1,15 @@
 import * as fs from "fs";
 import * as path from "path";
 import yaml from "js-yaml";
-import { inject, injectable } from "inversify";
-import { LogFormat } from "./logger";
-import { AppEnv, getAppEnv, UNKNOWN_ATTRIBUTE } from "../types/basal-protocol";
+import _ from "lodash";
+import { LogFormat, LoggerManager } from "./logger";
+import {
+  AppEnv,
+  ServiceManagerDiscovery,
+  getAppEnv,
+  SECOND,
+  UNKNOWN_ATTRIBUTE,
+} from "../types/basal-protocol";
 
 export const DEFAULT_DISCOVERY_PORT = 5707;
 export const DEFAULT_RETRY_MULTIPLIER = 2;
@@ -18,22 +24,39 @@ export interface AppConfig {}
 /**
  * Configuration options for the core distributed RPC service.
  *
- * @property net.tcp_address - TCP binding address. Defaults to "0.0.0.0".
- * @property net.tcp_port - TCP listening port. Defaults to 0 which finds a random available port.
- * @property net.udp_address - UDP binding address. Defaults to "0.0.0.0".
- * @property net.udp_port - UDP listening port. Defaults to 5707 for discovering ServiceManager.
+ * @property net.tcp.address - TCP binding address. Defaults to "0.0.0.0".
+ * @property net.tcp.port - TCP listening port. Defaults to 0 which finds a random available port.
+ * @property net.tcp.client.timeout - TCP client connection timeout in milliseconds. Defaults to 10000ms.
+ * @property net.tcp.client.keep_alive - Whether to enable TCP keep-alive. Defaults to false.
+ * @property net.tcp.client.keep_alive_initial_delay - TCP keep-alive initial delay in milliseconds. Defaults to 0.
+ * @property net.sm_port - ServiceManager discovery UDP port. Defaults to 5707.
+ * @property net.udp.address - UDP binding address. Defaults to "0.0.0.0".
+ * @property net.udp.port - UDP listening port. Defaults to 5707 for discovering ServiceManager.
  * @property retry - Retry configurations.
  * @property service_name - Name of the service. Preferably without spaces.
  */
 export interface CoreConfig {
   net: {
-    tcp_address: string;
-    tcp_port: number;
-    udp_address: string;
-    udp_port: number;
+    sm_discovery: symbol;
+    sm_port: number;
+    tcp: {
+      address: string;
+      port: number;
+      client: {
+        timeout: number;
+        keep_alive: boolean;
+        keep_alive_initial_delay: number;
+      };
+    };
+    udp: {
+      address: string;
+      port: number;
+    };
   };
+  report: ReportConfig;
   retry: RetryConfig;
   service_name: string;
+  provider_id: string; // Value assigned at ServiceProvider._updateProviderInfo().
 }
 
 /**
@@ -52,22 +75,37 @@ export interface LogConfig {
 }
 
 /**
+ * Configuration options for report scheduling.
+ *
+ * @property enabled - Whether report scheduling is enabled. Defaults to true.
+ * @property interval - Report interval in seconds. Defaults to 60.
+ * @property max_retries - Maximum retry attempts for a single report. Defaults to 3.
+ * @property retry_delay - Delay between retries in seconds. Defaults to 5.
+ */
+export interface ReportConfig {
+  enabled: boolean;
+  interval: number;
+  max_retries: number;
+  retry_delay: number;
+}
+
+/**
  * Configuration options for retry jobs.
  *
- * @property backoff.enable - Enable retry backoff or not. Defaults to false.
+ * @property backoff.enabled - Enable retry backoff or not. Defaults to false.
  * @property backoff.max_delay - Max delay of retry interval. Defaults to 4 minutes.
  * @property backoff.multiplier - Multiplier for increase retry interval. Must be greater than 1, defaults to 2.
  * @property interval - Retry interval in milliseconds. Defaults to 2000 ms.
- * @property max_try - Maximum retry attempts. Defaults to 0 which means infinite retries.
+ * @property max_retries - Maximum retry attempts. Defaults to 0 which means infinite retries.
  */
 export interface RetryConfig {
   backoff: {
-    enable: boolean;
+    enabled: boolean;
     max_delay: number;
     multiplier: number;
   };
   interval: number;
-  max_try?: number;
+  max_retries?: number;
 }
 
 /**
@@ -101,7 +139,6 @@ export interface ProviderConfig<
  * - YAML file loading with automatic search paths (config.yml, config/config.yml)
  * - Type-safe generic configuration with TypeScript
  * - Automatic default value fallback for missing configuration
- * - Dependency injection support via InversifyJS
  * - Environment-aware configuration detection
  *
  * @typeParam T_App - The application-specific configuration type extending AppConfig.
@@ -115,23 +152,23 @@ export interface ProviderConfig<
  * @example
  * ```typescript
  * // Extend for type-safe configuration access
- * @injectable()
  * class OrderServiceConfig extends ConfigManager<AppConfig, CoreConfig> {
  *   getServiceName(): string {
  *     return this.getConfig().core.service_name;
  *   }
  *
- *   getTcpPort(): number {
- *     return this.getConfig().core.net.tcp_port;
- *   }
+ * getTcpPort(): number {
+ * return this.getConfig().core.net.tcp.port;
+ * }
  * }
  *
  * // Use in services
- * @injectable()
  * class OrderService {
- *   constructor(
- *     @inject(TYPES.ConfigManager) private config: OrderServiceConfig
- *   ) {}
+ *   private config: OrderServiceConfig;
+ *
+ *   constructor() {
+ *     this.config = new OrderServiceConfig();
+ *   }
  *
  *   async start() {
  *     const port = this.config.getTcpPort();
@@ -140,12 +177,13 @@ export interface ProviderConfig<
  * }
  * ```
  */
-@injectable()
 export class ConfigManager<
   T_App extends AppConfig = AppConfig,
   T_Core extends CoreConfig = CoreConfig,
 > {
   protected config: ProviderConfig<T_App, T_Core>;
+  private _initName: string;
+  private _loggerManager: LoggerManager;
 
   /**
    * Public constructor for initializing and load the configuration.
@@ -153,8 +191,10 @@ export class ConfigManager<
    * @remarks
    * Supports dependency injection via InversifyJS.
    */
-  public constructor() {
+  public constructor(providerName?: string) {
+    this._initName = providerName || UNKNOWN_ATTRIBUTE;
     this.config = this._loadConfig();
+    this._loggerManager = new LoggerManager(this);
   }
 
   /**
@@ -164,6 +204,15 @@ export class ConfigManager<
    */
   public getAppConfig(): T_App {
     return this.getConfig().app;
+  }
+
+  /**
+   * Gets the current application environment (development, production, etc.).
+   *
+   * @returns {AppEnv} The current application environment.
+   */
+  public getAppEnv(): AppEnv {
+    return getAppEnv();
   }
 
   /**
@@ -185,6 +234,33 @@ export class ConfigManager<
   }
 
   /**
+   * Retrieves the LoggerManager instance for this configuration.
+   *
+   * @returns {LoggerManager} The LoggerManager instance.
+   */
+  public getLoggerManager(): LoggerManager {
+    return this._loggerManager;
+  }
+
+  /**
+   * Retrieves the logger instance for this configuration.
+   *
+   * @returns {Logger} The logger instance.
+   */
+  public getLogger() {
+    return this._loggerManager.getLogger();
+  }
+
+  /**
+   * Get provider Id of this ServiceProvider.
+   *
+   * @returns {string} The provider Id.
+   */
+  public getProviderId(): string {
+    return this.getCoreConfig().provider_id;
+  }
+
+  /**
    * Reloads the configuration by re-invoking the configuration loading logic.
    *
    * @remarks
@@ -194,6 +270,7 @@ export class ConfigManager<
    */
   public async reload(): Promise<void> {
     this.config = this._loadConfig();
+    this._loggerManager.reload();
   }
 
   // --------------------------------------------
@@ -205,24 +282,41 @@ export class ConfigManager<
   }
 
   protected getDefaultCoreConfig(): T_Core {
-    const NIC_ADDRESS = "0.0.0.0";
-    const SECOND = 1000;
+    const NIC_ADDRESS = "0.0.0.0"; // Bind on all NICs.
     return {
       net: {
-        tcp_address: NIC_ADDRESS,
-        tcp_port: 0,
-        udp_address: NIC_ADDRESS,
-        udp_port: DEFAULT_DISCOVERY_PORT,
+        sm_discovery: ServiceManagerDiscovery.UDP,
+        sm_port: DEFAULT_DISCOVERY_PORT,
+        tcp: {
+          address: NIC_ADDRESS,
+          port: 0, // Random allocated.
+          client: {
+            timeout: 10 * SECOND,
+            keep_alive: true,
+            keep_alive_initial_delay: 0 * SECOND,
+          },
+        },
+        udp: {
+          address: NIC_ADDRESS,
+          port: DEFAULT_DISCOVERY_PORT,
+        },
+      },
+      report: {
+        enabled: true,
+        interval: 60 * SECOND,
+        max_retries: 3,
+        retry_delay: 5 * SECOND,
       },
       retry: {
         interval: 2 * SECOND,
-        max_try: 0,
+        max_retries: 0, // Infinity.
         backoff: {
+          enabled: true,
           max_delay: 4 * 60 * SECOND, // 4 minutes.
           multiplier: DEFAULT_RETRY_MULTIPLIER,
         },
       },
-      service_name: UNKNOWN_ATTRIBUTE,
+      service_name: this._initName,
     } as T_Core;
   }
 
@@ -301,11 +395,7 @@ export class ConfigManager<
     parsed: Partial<ProviderConfig<T_App, T_Core>>,
   ): ProviderConfig<T_App, T_Core> {
     const defaults = this._getDefaultConfig();
-    return {
-      // Shallow merge for app, deep merge for core and log.
-      app: { ...defaults.app, ...parsed.app },
-      core: { ...defaults.core, ...parsed.core },
-      log: { ...defaults.log, ...parsed.log },
-    };
+    const merged = _.merge(defaults, parsed);
+    return merged;
   }
 }

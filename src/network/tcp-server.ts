@@ -4,13 +4,13 @@
  */
 
 import { createServer, Server, Socket as TcpSocket } from "net";
-import { inject, injectable } from "inversify";
+import { injectable } from "inversify";
 
 import { isAbortError } from "../common/abort-aware";
 import { ConfigManager } from "../common/config";
 import { LoggerManager } from "../common/logger";
 import { RetryScheduler } from "../common/retry";
-import { ServerState } from "../types/basal-protocol";
+import { ExecutionState, NetworkProtocol } from "../types/basal-protocol";
 import { TYPES } from "../aop/di-types";
 import { TypedEventEmitter } from "./typed-event-emitter";
 import {
@@ -21,13 +21,14 @@ import {
   tcpDataTransferSize,
 } from "../metrics/otel-metrics";
 import {
+  NetworkDirection,
   NetworkEvent,
   NetworkEventMap,
   NetworkPeer,
-  NetworkProtocol,
   NetworkRetryable,
 } from "./network-events";
-import { OtelTracing, generateCorrelationId } from "../metrics/otel-tracing";
+import { generateCorrelationId } from "../metrics/otel-resource";
+import { NetworkSpanOptions, OtelTracer } from "../metrics/otel-tracing";
 
 /**
  * This class provides a robust, event-driven TCP server implementation specifically designed
@@ -76,38 +77,33 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   protected logger: ReturnType<LoggerManager["getLogger"]>;
 
   private _abortController!: AbortController;
-  private _loggerManager: LoggerManager;
   private _retryScheduler!: RetryScheduler;
+  private _state: ExecutionState = ExecutionState.Stopped;
   private _server: Server | undefined = undefined;
 
-  private _state: ServerState = ServerState.Stopped;
   private _address!: string;
-  private _port!: number;
+  private _port: number = 0; // 0 means not initialized yet.
 
   private _sockets: Set<TcpSocket> = new Set();
+  private _txBytes: number = 0; // Track transmitted bytes
+  private _rxBytes: number = 0; // Track received bytes
 
   /**
    * Creates a new TCP server instance.
    *
    * @param configManager - The configuration manager for retrieving service settings.
-   * @param loggerManager - The logger manager for obtaining the application logger.
    * @param name - Optional name to identify this server instance.
    */
-  constructor(
-    @inject(TYPES.ConfigManager) configManager: ConfigManager,
-    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
-    name: string = "tcp-server",
-  ) {
+  constructor(configManager: ConfigManager, name: string = "tcp-server") {
     super();
     this.configManager = configManager;
-    this._loggerManager = loggerManager;
-    this.logger = loggerManager.getLogger();
+    this.logger = configManager.getLogger();
     this.name = name;
 
     // Prevent process crash if 'error' is emitted and no one is listening
-    this.on(ServerState.Error, (err) => {
+    this.on(ExecutionState.Error, (err) => {
       this.logger.error(
-        `${this._getArrowedName()} Internal TCP Error: ${err.error?.message || err.error}`,
+        `${this.getArrowedName()} Internal TCP Error: ${err.error?.message || err.error}`,
       );
     });
   }
@@ -117,12 +113,44 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   // -------------------------------
 
   /**
+   * Broadcasts data to all connected clients.
+   *
+   * @param data - The data to broadcast
+   * @returns Total bytes written
+   */
+  public broadcast(data: Buffer | string): number {
+    const dataBuffer = typeof data === "string" ? Buffer.from(data) : data;
+    let totalWritten = 0;
+
+    for (const socket of this._sockets) {
+      if (!socket.destroyed) {
+        const written = socket.write(dataBuffer);
+        if (written) {
+          totalWritten += dataBuffer.length;
+        }
+      }
+    }
+
+    this._txBytes += totalWritten;
+    return totalWritten;
+  }
+
+  /**
    * Returns the port the server is listening on.
    *
    * @returns The port number (dynamically assigned if configured port is 0).
    */
   public getPort(): number {
     return this._port;
+  }
+
+  /**
+   * Returns the total bytes received by this server.
+   *
+   * @returns Total received bytes
+   */
+  public getRxBytes(): number {
+    return this._rxBytes;
   }
 
   /**
@@ -138,8 +166,25 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
    *
    * @returns The current ServerState (Stopped, Starting, Running, Listening, etc.).
    */
-  public getState(): ServerState {
+  public getState(): ExecutionState {
     return this._state;
+  }
+
+  /**
+   * Returns the total bytes transmitted by this server.
+   *
+   * @returns Total transmitted bytes
+   */
+  public getTxBytes(): number {
+    return this._txBytes;
+  }
+
+  /**
+   * Resets the byte counters.
+   */
+  public resetByteCounters(): void {
+    this._txBytes = 0;
+    this._rxBytes = 0;
   }
 
   /**
@@ -159,41 +204,53 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
    * ```
    */
   public async start(): Promise<void> {
-    if (this._state !== ServerState.Stopped) return;
+    if (this._state !== ExecutionState.Stopped) return;
 
     const config = this.configManager.getCoreConfig();
-    const netConfig = config.net;
+    const tcpConfig = config.net.tcp;
     const retryConfig = config.retry;
 
-    this.logger = this._loggerManager.getLogger(); // Reload the logger, in case the loggerManager is reloaded.
+    this.logger = this.configManager.getLogger(); // Reload the logger.
     this._abortController = new AbortController();
-    this._address = netConfig.tcp_address;
-    this._port = netConfig.tcp_port; // Default to 0.
+    this._address = tcpConfig.address;
+
+    /*
+     * Use configured port only when initializing.
+     * Otherwise, use the port previously occupied to keep serving on the same port.
+     */
+    if (this._port === 0) {
+      this._port = tcpConfig.port; // Default to 0.
+    }
+
+    this._setState(ExecutionState.Starting);
+    this.logger.debug(
+      `Initializing ${this.getArrowedName()} TCP listener on ${this._address}:${this._port}`,
+    );
 
     this._retryScheduler = new RetryScheduler(() => this._attemptListen(), {
       interval: retryConfig.interval,
-      max_try: retryConfig.max_try,
+      max_retries: retryConfig.max_retries,
       backoff: retryConfig.backoff,
       signal: this._abortController.signal,
       onRetry: (ctx) => {
-        this._setState(ServerState.Retrying);
-        this.logger.warn(`Retry attempt #${ctx.attempt}.`);
+        this._setState(ExecutionState.Retrying);
+        this.logger.warn(
+          `Retry attempt #${ctx.attempt} for ${this.getArrowedName()}.`,
+        );
       },
       onExhausted: (ctx) => {
-        this._setState(ServerState.Halt);
-        this.logger.error(`Retry exhausted after ${ctx.attempt} attempts.`);
+        this._setState(ExecutionState.Halt);
+        this.logger.error(
+          `Retry exhausted after ${ctx.attempt} attempts for ${this.getArrowedName()}.`,
+        );
       },
       onError: (err) => {
-        this._setState(ServerState.Error);
-        this.logger.error(`Retry schedule error: ${err}`);
+        this._setState(ExecutionState.Error);
+        this.logger.error(
+          `Retry schedule error from ${this.getArrowedName()}: ${err}`,
+        );
       },
     });
-
-    this._setState(ServerState.Starting);
-
-    this.logger.debug(
-      `Initializing ${this._getArrowedName()} TCP listener on ${this._address}:${this._port}`,
-    );
 
     try {
       // Use RetryScheduler.run() as the main retry loop
@@ -201,13 +258,13 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     } catch (err) {
       if (isAbortError(err)) {
         // Cancellation is not a failure.
-        this._setState(ServerState.Stopped);
+        this._setState(ExecutionState.Stopped);
         this.logger.warn(
-          `The ${this._getArrowedName()} TCP server start aborted.`,
+          `The ${this.getArrowedName()} TCP server start aborted.`,
         );
         return;
       }
-      this._setState(ServerState.Error);
+      this._setState(ExecutionState.Error);
       throw err;
     }
   }
@@ -218,10 +275,10 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
    * @returns Promise that resolves when the server has stopped.
    */
   public async stop(): Promise<void> {
-    if (this._state === ServerState.Stopped) return;
+    if (this._state === ExecutionState.Stopped) return;
 
-    this.logger.info(`Stopping the ${this._getArrowedName()} TCP server ...`);
-    this._setState(ServerState.Stopped);
+    this.logger.info(`Stopping the ${this.getArrowedName()} TCP server ...`);
+    this._setState(ExecutionState.Stopped);
 
     this._abortController.abort();
     this._retryScheduler?.stop();
@@ -234,7 +291,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
           // It's common for close() to error if the server was not open
           // We log it but resolve anyway to ensure shutdown continues.
           this.logger.warn(
-            `${this._getArrowedName()} TCP server close error (ignoring)`,
+            `${this.getArrowedName()} TCP server close error (ignoring)`,
             { error: err },
           );
         }
@@ -257,7 +314,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     }
 
     await closeServerPromise;
-    this.logger.info(`The ${this._getArrowedName()} TCP Server stopped.`);
+    this.logger.info(`The ${this.getArrowedName()} TCP Server stopped.`);
   }
 
   // --------------------------------------------
@@ -265,109 +322,14 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
   // --------------------------------------------
 
   /**
-   * Handles incoming data (Runtime logic).
-   * Primaryly for subclass override to customize the incoming data handling behaviors.
-   * Other classes which instantiate this class should attach their message processor
-   * to the emitted `NetworkEvent.Data` event from this instance.
-   * Note: This is attached via .on(), so it persists after the Promise resolves.
-   */
-  protected handleData(
-    peer: NetworkPeer,
-    data: string,
-    connectionInfo: any,
-  ): void {
-    bytesCounter.add(data.length, connectionInfo);
-    this.emit(NetworkEvent.Data, { peer, data });
-  }
-
-  // --------------------------------------------
-  // Private Methods
-  // --------------------------------------------
-
-  private async _attemptListen(): Promise<void> {
-    if (this._state === ServerState.Stopped) {
-      throw new DOMException("Aborted", "AbortError");
-    }
-
-    return new Promise<void>((resolve, reject) => {
-      try {
-        this._server = createServer((socket) => this._handleConnection(socket));
-
-        const cleanup = () => {
-          this._server?.off(NetworkEvent.Listening, onListening);
-          this._server?.off(NetworkEvent.Error, onError);
-          this._server?.off(NetworkEvent.Close, onClose);
-        };
-
-        const onListening = () => {
-          cleanup();
-
-          // Update port if ephemeral (listen port is 0).
-          const addr = this._server!.address();
-          if (addr && typeof addr === "object") {
-            this._port = addr.port;
-          }
-
-          this._setState(ServerState.Listening);
-          this._retryScheduler.reset(); // reset attempts after success
-          this.logger.info(
-            `The ${this._getArrowedName()} TCP server listening on ${this._address}:${this._port}`,
-          );
-          this.emit(NetworkEvent.Listening);
-          resolve();
-        };
-
-        const onError = (err: NodeJS.ErrnoException) => {
-          cleanup();
-          this._server?.close();
-
-          if (NetworkRetryable.has(err.code ?? "")) {
-            reject(err); // Reject triggers retry loop, the RetryScheduler.run() will retry.
-          } else {
-            this._setState(ServerState.Error);
-            this.emit(NetworkEvent.Error, {
-              error: err,
-              peer: undefined as any,
-            });
-            reject(err); // Fatal, do not retry.
-          }
-        };
-
-        const onClose = () => {
-          cleanup();
-          if (this._state !== ServerState.Stopped) {
-            this.logger.warn(
-              `The ${this._getArrowedName()} TCP server closed unexpectedly, retrying ...`,
-            );
-            reject(
-              new Error(
-                `The ${this._getArrowedName()} TCP server closed unexpectedly.`,
-              ),
-            );
-          }
-        };
-
-        this._server.once(NetworkEvent.Listening, onListening);
-        this._server.once(NetworkEvent.Error, onError);
-        this._server.once(NetworkEvent.Close, onClose);
-
-        this._server.listen(this._port, this._address);
-      } catch (err) {
-        this._setState(ServerState.Error);
-        reject(err);
-      }
-    });
-  }
-
-  /**
    * Returns the name with "<>" of this listener.
    * Primary for logging and metric tagging.
    */
-  private _getArrowedName(): string {
+  protected getArrowedName(): string {
     return `<${this.name}>`;
   }
 
-  private _handleConnection(socket: TcpSocket): void {
+  protected handleConnection(socket: TcpSocket): void {
     const address = socket.remoteAddress || "";
     const port = socket.remotePort || 0;
     const peer: NetworkPeer = {
@@ -387,17 +349,19 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     const connectionStartTime = Date.now();
 
     // Create distributed tracing span for TCP connection
-    const connectionSpan = OtelTracing.createNetworkSpan("accept", "tcp", {
+    const spanOptions: NetworkSpanOptions = {
       address,
       port,
-      direction: "inbound",
+      protocol: NetworkProtocol.TCP,
+      direction: NetworkDirection.Out,
       attributes: {
         "correlation.id": correlationId,
-        "network.connection.id": `tcp_${connectionStartTime}_${Math.random().toString(36).slice(2, 8)}`,
-        "network.peer.address": address,
-        "network.peer.port": port,
+        "network.target": `${address}:${port}`,
       },
-    });
+    };
+    const providerId = this.configManager.getProviderId();
+    const tracer = OtelTracer.getInstance(providerId);
+    const connectionSpan = tracer.createNetworkSpan("accept", spanOptions);
 
     this._sockets.add(socket); // Tracking the socket.
     activeConnections.add(1, connectionInfo); // Update connection metrics for OpenTelemetry.
@@ -415,27 +379,28 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
         });
 
         // Create span for data handling
-        const dataHandlingSpan = OtelTracing.createNetworkSpan(
-          "handle_data",
-          "tcp",
-          {
-            address,
-            port,
-            direction: "inbound",
-            attributes: {
-              "correlation.id": correlationId,
-              "network.data.size": data.length,
-              "network.event": "data_received",
-            },
+        const spanOptions: NetworkSpanOptions = {
+          address,
+          port,
+          protocol: NetworkProtocol.TCP,
+          direction: NetworkDirection.In,
+          attributes: {
+            "correlation.id": correlationId,
+            "network.data.size": data.length,
+            "network.event": "data_received",
           },
+        };
+        const dataHandlingSpan = tracer.createNetworkSpan(
+          "handle_data",
+          spanOptions,
         );
 
         try {
           // Call Function.apply() to force 'this' scope.
-          this.handleData.apply(this, [peer, data.toString(), connectionInfo]);
+          this.handleData.apply(this, [peer, data, connectionInfo]);
           dataHandlingSpan.setStatus({ code: 1 }); // OK
         } catch (error) {
-          OtelTracing.recordException(dataHandlingSpan, error as Error);
+          tracer.recordException(dataHandlingSpan, error as Error);
           dataHandlingSpan.setStatus({
             code: 2, // ERROR
             message: (error as Error).message,
@@ -496,7 +461,7 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
         correlation_id: correlationId,
       });
 
-      OtelTracing.recordException(connectionSpan, err, {
+      tracer.recordException(connectionSpan, err, {
         "error.code": nodeError.code,
         "error.message": err.message,
       });
@@ -518,10 +483,108 @@ export class TcpServer extends TypedEventEmitter<NetworkEventMap> {
     });
   }
 
-  private _setState(state: ServerState): void {
+  /**
+   * Handles incoming data (Runtime logic).
+   * Primaryly for subclass override to customize the incoming data handling behaviors.
+   * Other classes which instantiate this class should attach their message processor
+   * to the emitted `NetworkEvent.Data` event from this instance.
+   * Note: This is attached via .on(), so it persists after the Promise resolves.
+   */
+  protected handleData(
+    peer: NetworkPeer,
+    data: string | Buffer,
+    connectionInfo: any,
+  ): void {
+    const dataLength =
+      typeof data === "string" ? Buffer.byteLength(data) : data.length;
+    this._rxBytes += dataLength;
+    bytesCounter.add(dataLength, connectionInfo);
+    this.emit(NetworkEvent.Data, { peer, data });
+  }
+
+  // --------------------------------------------
+  // Private Methods
+  // --------------------------------------------
+
+  private async _attemptListen(): Promise<void> {
+    if (this._state === ExecutionState.Stopped) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      try {
+        this._server = createServer((socket) => this.handleConnection(socket));
+
+        const cleanup = () => {
+          this._server?.off(NetworkEvent.Listening, onListening);
+          this._server?.off(NetworkEvent.Error, onError);
+          this._server?.off(NetworkEvent.Close, onClose);
+        };
+
+        const onListening = () => {
+          cleanup();
+
+          // Update port if ephemeral (listen port is 0).
+          const addr = this._server!.address();
+          if (addr && typeof addr === "object") {
+            this._port = addr.port;
+          }
+
+          this._setState(ExecutionState.Listening);
+          this._retryScheduler.reset(); // reset attempts after success
+          this.logger.info(
+            `The ${this.getArrowedName()} TCP server listening on ${this._address}:${this._port}`,
+          );
+          this.emit(NetworkEvent.Listening);
+          resolve();
+        };
+
+        const onError = (err: NodeJS.ErrnoException) => {
+          cleanup();
+          this._server?.close();
+
+          if (NetworkRetryable.has(err.code ?? "")) {
+            reject(err); // Reject triggers retry loop, the RetryScheduler.run() will retry.
+          } else {
+            this._setState(ExecutionState.Error);
+            this.emit(NetworkEvent.Error, {
+              error: err,
+              peer: undefined as any,
+            });
+            reject(err); // Fatal, do not retry.
+          }
+        };
+
+        const onClose = () => {
+          cleanup();
+          if (this._state !== ExecutionState.Stopped) {
+            this.logger.warn(
+              `The ${this.getArrowedName()} TCP server closed unexpectedly, retrying ...`,
+            );
+            reject(
+              new Error(
+                `The ${this.getArrowedName()} TCP server closed unexpectedly.`,
+              ),
+            );
+          }
+        };
+
+        this._server.once(NetworkEvent.Listening, onListening);
+        this._server.once(NetworkEvent.Error, onError);
+        this._server.once(NetworkEvent.Close, onClose);
+
+        this._server.listen(this._port, this._address);
+      } catch (err) {
+        this._setState(ExecutionState.Error);
+        reject(err);
+      }
+    });
+  }
+
+  private _setState(state: ExecutionState): void {
     if (this._state !== state) {
       this.logger.info(
-        `${this._getArrowedName()} ${this._port}/TCP state: ${this._state} → ${state}`,
+        `${this.getArrowedName()} ${this._port}/TCP state: ${this._state} → ${state}`,
       );
       this._state = state;
     }

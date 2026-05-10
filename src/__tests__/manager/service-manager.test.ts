@@ -2,18 +2,52 @@ import "reflect-metadata";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ConfigManager, DEFAULT_DISCOVERY_PORT } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
-import { ServerState } from "../../types/basal-protocol";
-
+import {
+  ServerState,
+  IdGenerator,
+  ExecutionState,
+  ReportData,
+} from "../../types/basal-protocol";
+import { TYPES } from "../../aop/di-types";
 import { BroadcastUdpServer } from "../../network/broadcast-udp-server";
 import { ServiceManager } from "../../manager/service-manager";
 import { TcpServer } from "../../network/tcp-server";
 import { UdpServer } from "../../network/udp-server";
 
+vi.mock("../../aop/container", () => ({
+  container: {
+    get: vi.fn(),
+  },
+  TYPES,
+  createNamedTcpServer: vi.fn(),
+  createNamedUdpServer: vi.fn((name: string) => ({
+    start: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue(undefined),
+    getState: vi.fn().mockReturnValue(ServerState.Listening),
+    getPort: vi.fn().mockReturnValue(DEFAULT_DISCOVERY_PORT),
+    setManagerInfo: vi.fn(),
+    name,
+  })),
+}));
+
+const createMockIdGenerator = (): IdGenerator => ({
+  generate: vi.fn().mockReturnValue("mock-uuid-1234"),
+  shortId: vi.fn().mockReturnValue("mockinstance01"),
+});
+
+const createMockLogger = () => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  silly: vi.fn(),
+});
+
 const createMockTcpServer = (name: string) =>
   ({
     start: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockResolvedValue(undefined),
-    getState: vi.fn().mockReturnValue(ServerState.Listening),
+    getState: vi.fn().mockReturnValue("Listening" as any),
     getPort: vi.fn().mockReturnValue(0),
     getServer: vi.fn().mockReturnValue({
       address: () => ({ port: 8080, address: "127.0.0.1" }),
@@ -21,186 +55,41 @@ const createMockTcpServer = (name: string) =>
     name,
   }) as unknown as TcpServer;
 
-const createMockWoAddrTcpServer = (name: string) =>
-  ({
-    start: vi.fn().mockResolvedValue(undefined),
-    stop: vi.fn().mockResolvedValue(undefined),
-    getState: vi.fn().mockReturnValue(ServerState.Listening),
-    getPort: vi.fn().mockReturnValue(0),
-    getServer: vi.fn().mockReturnValue({
-      address: () => undefined,
-    }),
-    name,
-  }) as unknown as TcpServer;
-
-const createFailingMockTcpServer = (name: string) =>
-  ({
-    start: vi.fn().mockRejectedValue(new Error("TCP server failed to start")),
-    stop: vi.fn().mockResolvedValue(undefined),
-    getState: vi.fn().mockReturnValue(ServerState.Error),
-    getPort: vi.fn().mockReturnValue(0),
-    getServer: vi.fn().mockReturnValue({}),
-    name,
-  }) as unknown as TcpServer;
-
 const createMockUdpServer = (name: string) =>
   ({
     start: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockResolvedValue(undefined),
-    getState: vi.fn().mockReturnValue(ServerState.Listening),
+    getState: vi.fn().mockReturnValue("Listening" as any),
     getPort: vi.fn().mockReturnValue(DEFAULT_DISCOVERY_PORT),
     setManagerInfo: vi.fn(),
     name,
   }) as unknown as BroadcastUdpServer;
-
-const createFailingMockUdpServer = (name: string) =>
-  ({
-    start: vi.fn().mockRejectedValue(new Error("UDP server failed to start")),
-    stop: vi.fn().mockResolvedValue(undefined),
-    getState: vi.fn().mockReturnValue(ServerState.Error),
-    getPort: vi.fn().mockReturnValue(DEFAULT_DISCOVERY_PORT),
-    setManagerInfo: vi.fn(),
-    name,
-  }) as unknown as BroadcastUdpServer;
-
-vi.mock("../../aop/container", () => ({
-  container: {
-    get: vi.fn((type) => {
-      if (type.toString().includes("ConfigManager")) {
-        return {
-          getCoreConfig: () => ({
-            net: {
-              tcp_address: "127.0.0.1",
-              tcp_port: 0,
-              udp_address: "127.0.0.1",
-              udp_port: DEFAULT_DISCOVERY_PORT,
-            },
-            retry: {
-              interval: 10,
-              max_try: 2,
-              backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
-            },
-            service_name: "test-service",
-          }),
-          getConfig: () => ({
-            app: {},
-            core: {
-              net: {
-                tcp_address: "127.0.0.1",
-                tcp_port: 0,
-                udp_address: "127.0.0.1",
-                udp_port: DEFAULT_DISCOVERY_PORT,
-              },
-              retry: {
-                interval: 10,
-                max_try: 2,
-                backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
-              },
-              service_name: "test-service",
-            },
-            log: {
-              format: "console",
-              log_level: "info",
-              max_files: "14d",
-              max_size: "20m",
-            },
-          }),
-          reload: vi.fn(),
-        };
-      }
-      if (type.toString().includes("LoggerManager")) {
-        return {
-          getLogger: () => ({
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-            debug: vi.fn(),
-          }),
-          reload: vi.fn(),
-        };
-      }
-      return {};
-    }),
-  },
-  createNamedTcpServer: vi.fn((name: string) => {
-    if (name === "registerWoAddress") {
-      return {
-        start: vi.fn().mockResolvedValue(undefined),
-        stop: vi.fn().mockResolvedValue(undefined),
-        getState: vi.fn().mockReturnValue(ServerState.Listening),
-        getPort: vi.fn().mockReturnValue(0),
-        getServer: vi.fn().mockReturnValue({
-          address: () => undefined,
-        }),
-        name,
-      } as unknown as TcpServer;
-    }
-    if (name === "failedOfRegister") {
-      return {
-        start: vi
-          .fn()
-          .mockRejectedValue(new Error("TCP server failed to start")),
-        stop: vi.fn().mockResolvedValue(undefined),
-        getState: vi.fn().mockReturnValue(ServerState.Error),
-        getPort: vi.fn().mockReturnValue(0),
-        getServer: vi.fn().mockReturnValue({}),
-        name,
-      } as unknown as TcpServer;
-    }
-    return {
-      start: vi.fn().mockResolvedValue(undefined),
-      stop: vi.fn().mockResolvedValue(undefined),
-      getState: vi.fn().mockReturnValue(ServerState.Listening),
-      getPort: vi.fn().mockReturnValue(0),
-      getServer: vi.fn().mockReturnValue({
-        address: () => ({ port: 8080, address: "127.0.0.1" }),
-      }),
-      name,
-    } as unknown as TcpServer;
-  }),
-  createNamedUdpServer: vi.fn((name: string) => {
-    if (name === "failedOfReception") {
-      return {
-        start: vi
-          .fn()
-          .mockRejectedValue(new Error("UDP server failed to start")),
-        stop: vi.fn().mockResolvedValue(undefined),
-        getState: vi.fn().mockReturnValue(ServerState.Error),
-        getPort: vi.fn().mockReturnValue(DEFAULT_DISCOVERY_PORT),
-        setManagerInfo: vi.fn(),
-        name,
-      } as unknown as BroadcastUdpServer;
-    }
-    return {
-      start: vi.fn().mockResolvedValue(undefined),
-      stop: vi.fn().mockResolvedValue(undefined),
-      getState: vi.fn().mockReturnValue(ServerState.Listening),
-      getPort: vi.fn().mockReturnValue(DEFAULT_DISCOVERY_PORT),
-      setManagerInfo: vi.fn(),
-      name,
-    } as unknown as BroadcastUdpServer;
-  }),
-}));
 
 describe("ServiceManager", () => {
   let serviceManager: ServiceManager;
+  let mockIdGenerator: IdGenerator;
+  let mockLogger: ReturnType<typeof createMockLogger>;
   let mockConfigManager: ConfigManager;
   let mockLoggerManager: LoggerManager;
-  let mockLogger: any;
-  let mockTcpServer: TcpServer;
-  let mockUdpServer: UdpServer;
+  let mockNetConfig: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
 
+    mockIdGenerator = createMockIdGenerator();
+    mockLogger = createMockLogger();
+
+    mockNetConfig = {
+      tcp_address: "127.0.0.1",
+      tcp_port: 0,
+      udp_address: "127.0.0.1",
+      udp_port: DEFAULT_DISCOVERY_PORT,
+      sm_discovery: Symbol.for("UdpDiscovery"),
+    };
+
     mockConfigManager = {
       getCoreConfig: () => ({
-        net: {
-          tcp_address: "127.0.0.1",
-          tcp_port: 0,
-          udp_address: "127.0.0.1",
-          udp_port: DEFAULT_DISCOVERY_PORT,
-        },
+        net: mockNetConfig,
         retry: {
           interval: 10,
           max_try: 2,
@@ -232,24 +121,16 @@ describe("ServiceManager", () => {
         },
       }),
       reload: vi.fn(),
+      getLogger: () => mockLogger,
     } as unknown as ConfigManager;
-
-    mockLogger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    };
 
     mockLoggerManager = {
       getLogger: () => mockLogger,
       reload: vi.fn(),
     } as unknown as LoggerManager;
 
-    mockTcpServer = createMockTcpServer("register");
-    mockUdpServer = createMockUdpServer("reception");
-
-    serviceManager = new ServiceManager(mockConfigManager, mockLoggerManager);
+    serviceManager = new ServiceManager(mockIdGenerator);
+    (serviceManager as any)._setConfigManager(mockConfigManager);
   });
 
   afterEach(() => {
@@ -268,517 +149,342 @@ describe("ServiceManager", () => {
       );
     });
 
-    it("should generate unique instance ID", () => {
+    it("should generate instance ID from idGenerator", () => {
       const id = serviceManager.PROTOCOL.provider.id;
       expect(id).toBeDefined();
-      expect(id.length).toBe(16);
+      expect(mockIdGenerator.shortId).toHaveBeenCalled();
     });
 
-    it("should initialize state to Stopped", () => {
-      expect((serviceManager as any)._state).toBe(ServerState.Stopped);
+    it("should initialize with protocol_ver 260321", () => {
+      expect(serviceManager.PROTOCOL.protocol_ver).toBe("260321");
+    });
+
+    it("should have register and report APIs", () => {
+      expect(serviceManager.PROTOCOL.apis).toHaveProperty("register");
+      expect(serviceManager.PROTOCOL.apis).toHaveProperty("report");
+      expect(serviceManager.PROTOCOL.apis).toHaveProperty("reception");
     });
   });
 
   describe("getServiceName", () => {
-    it("should return service name from config", () => {
+    it("should return service name from PROTOCOL", () => {
       expect(serviceManager.getServiceName()).toBe("test-service");
     });
+  });
 
-    it("should update PROTOCOL provider name from config", () => {
-      expect(serviceManager.PROTOCOL.provider.name).toBe("test-service");
+  
+
+  describe("clearReports", () => {
+    it("should do nothing when service has no reports", () => {
+      expect(() =>
+        serviceManager.clearReports({ service: "svc", instance: "inst" }),
+      ).not.toThrow();
+    });
+
+    it("should clear reports for specific peer", () => {
+      const peer = { service: "TestService", instance: "inst-1" };
+      const reportData: ReportData = {
+        timestamp: Date.now(),
+        state: ExecutionState.Running,
+        ramUsed: 512,
+        ramFree: 1024,
+        cpuLoad: 45,
+        netTx: "1.00 MB",
+        netTxBytes: 1048576,
+        netRx: "2.00 MB",
+        netRxBytes: 2097152,
+      };
+
+      serviceManager.gotReport({
+        peer,
+        api: "report",
+        args: reportData,
+        msgId: "msg-1",
+      });
+
+      expect(serviceManager.getReports(peer)).toHaveLength(1);
+      serviceManager.clearReports(peer);
+      expect(serviceManager.getReports(peer)).toHaveLength(0);
+    });
+
+    it("should handle clearing reports for non-existent service", () => {
+      expect(() =>
+        serviceManager.clearReports({ service: "none", instance: "none" }),
+      ).not.toThrow();
     });
   });
 
-  describe("getMetrics", () => {
-    it("should return metrics instance", () => {
-      const metrics = serviceManager.getMetrics();
-      expect(metrics).toBeDefined();
+  describe("getReports", () => {
+    it("should return empty array when no reports exist", () => {
+      const reports = serviceManager.getReports({
+        service: "none",
+        instance: "none",
+      });
+      expect(reports).toEqual([]);
+    });
+
+    it("should return reports for specific peer", () => {
+      const peer = { service: "TestService", instance: "inst-1" };
+      const reportData: ReportData = {
+        timestamp: Date.now(),
+        state: ExecutionState.Running,
+        ramUsed: 512,
+        ramFree: 1024,
+        cpuLoad: 45,
+        netTx: "1.00 MB",
+        netTxBytes: 1048576,
+        netRx: "2.00 MB",
+        netRxBytes: 2097152,
+      };
+
+      serviceManager.gotReport({
+        peer,
+        api: "report",
+        args: reportData,
+        msgId: "msg-1",
+      });
+
+      const reports = serviceManager.getReports(peer);
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toBe(reportData);
     });
   });
 
-  describe("getTcpServer", () => {
-    it("should return undefined when no TCP server is registered", () => {
-      const tcpServer = serviceManager.getTcpServer("register");
-      expect(tcpServer).toBeUndefined();
+  describe("getLatestReport", () => {
+    it("should return undefined when no reports exist", () => {
+      const latest = serviceManager.getLatestReport({
+        service: "none",
+        instance: "none",
+      });
+      expect(latest).toBeUndefined();
     });
 
-    it("should return undefined for non-existent server", () => {
-      const tcpServer = serviceManager.getTcpServer("non-existent");
-      expect(tcpServer).toBeUndefined();
-    });
-  });
+    it("should return latest report", () => {
+      const peer = { service: "TestService", instance: "inst-1" };
+      const report1: ReportData = {
+        timestamp: Date.now() - 1000,
+        state: ExecutionState.Running,
+        ramUsed: 256,
+        ramFree: 1024,
+        cpuLoad: 30,
+        netTx: "512 KB",
+        netTxBytes: 524288,
+        netRx: "1.00 MB",
+        netRxBytes: 1048576,
+      };
+      const report2: ReportData = {
+        timestamp: Date.now(),
+        state: ExecutionState.Running,
+        ramUsed: 512,
+        ramFree: 2048,
+        cpuLoad: 45,
+        netTx: "1.00 MB",
+        netTxBytes: 1048576,
+        netRx: "2.00 MB",
+        netRxBytes: 2097152,
+      };
 
-  describe("getUdpServer", () => {
-    it("should return undefined when no UDP server is registered", () => {
-      const udpServer = serviceManager.getUdpServer("reception");
-      expect(udpServer).toBeUndefined();
-    });
+      serviceManager.gotReport({
+        peer,
+        api: "report",
+        args: report1,
+        msgId: "msg-1",
+      });
+      serviceManager.gotReport({
+        peer,
+        api: "report",
+        args: report2,
+        msgId: "msg-2",
+      });
 
-    it("should return undefined for non-existent server", () => {
-      const udpServer = serviceManager.getUdpServer("non-existent");
-      expect(udpServer).toBeUndefined();
-    });
-  });
-
-  describe("reload", () => {
-    it("should reload config manager", async () => {
-      await serviceManager.reload();
-      expect(mockConfigManager.reload).toHaveBeenCalled();
-    });
-
-    it("should reload logger manager", async () => {
-      await serviceManager.reload();
-      expect(mockLoggerManager.reload).toHaveBeenCalled();
-    });
-  });
-
-  describe("start", () => {
-    it("should transition to Running state on successful start", async () => {
-      (serviceManager as any)._services.set("register", mockTcpServer);
-      (serviceManager as any)._services.set("reception", mockUdpServer);
-      (serviceManager as any).initialized = true;
-
-      await serviceManager.start();
-
-      expect((serviceManager as any)._state).toBe(ServerState.Running);
-    });
-  });
-
-  describe("stop", () => {
-    it("should set state to Stopping when stopping", async () => {
-      await serviceManager.stop();
-      expect((serviceManager as any)._state).toBe(ServerState.Stopped);
-    });
-
-    it("should log info messages during stop", async () => {
-      await serviceManager.stop();
-      expect(mockLogger.info).toHaveBeenCalledWith("Stopping all services ...");
-    });
-
-    it("should transition to Stopped state after stop", async () => {
-      await serviceManager.stop();
-      expect((serviceManager as any)._state).toBe(ServerState.Stopped);
-    });
-
-    it("should be idempotent when already stopped", async () => {
-      await serviceManager.stop();
-      await serviceManager.stop();
-      expect((serviceManager as any)._state).toBe(ServerState.Stopped);
-    });
-
-    it("should log stop message", async () => {
-      await serviceManager.stop();
-      expect(mockLogger.info).toHaveBeenCalled();
+      const latest = serviceManager.getLatestReport(peer);
+      expect(latest).toBe(report2);
     });
   });
 
-  describe("restart", () => {
-    it("should call stop, reload, and start", async () => {
-      const startSpy = vi.spyOn(serviceManager, "start");
-      const stopSpy = vi.spyOn(serviceManager, "stop");
-      const reloadSpy = vi.spyOn(serviceManager, "reload");
+  describe("getReportedInstances", () => {
+    it("should return empty array when no instances reported", () => {
+      const instances = serviceManager.getReportedInstances();
+      expect(instances).toEqual([]);
+    });
 
-      await serviceManager.restart();
+    it("should return all reported instances", () => {
+      const peer1 = { service: "ServiceA", instance: "inst-1" };
+      const peer2 = { service: "ServiceB", instance: "inst-2" };
+      const reportData: ReportData = {
+        timestamp: Date.now(),
+        state: ExecutionState.Running,
+        ramUsed: 512,
+        ramFree: 1024,
+        cpuLoad: 45,
+        netTx: "1.00 MB",
+        netTxBytes: 1048576,
+        netRx: "2.00 MB",
+        netRxBytes: 2097152,
+      };
 
-      expect(stopSpy).toHaveBeenCalled();
-      expect(reloadSpy).toHaveBeenCalled();
-      expect(startSpy).toHaveBeenCalled();
+      serviceManager.gotReport({
+        peer: peer1,
+        api: "report",
+        args: reportData,
+        msgId: "msg-1",
+      });
+      serviceManager.gotReport({
+        peer: peer2,
+        api: "report",
+        args: reportData,
+        msgId: "msg-2",
+      });
+
+      const instances = serviceManager.getReportedInstances();
+      expect(instances).toHaveLength(2);
+      expect(instances).toContainEqual(peer1);
+      expect(instances).toContainEqual(peer2);
     });
   });
 
-  describe("state transitions", () => {
-    it("should have initial state of Stopped", () => {
-      expect((serviceManager as any)._state).toBe(ServerState.Stopped);
-    });
+  describe("gotReport", () => {
+    it("should warn on invalid report data", async () => {
+      await serviceManager.gotReport({
+        peer: { service: "Test", instance: "inst" },
+        api: "report",
+        args: undefined,
+        msgId: "msg-1",
+      });
 
-    it("should set state to Stopped after stop", async () => {
-      await serviceManager.stop();
-      expect((serviceManager as any)._state).toBe(ServerState.Stopped);
-    });
-  });
-
-  describe("getIdentity", () => {
-    it("should return identity in format ServiceName-InstanceId", () => {
-      const identity = (serviceManager as any).getIdentity();
-      expect(identity).toContain("test-service-");
-      expect(identity).toContain(serviceManager.PROTOCOL.provider.id);
-    });
-  });
-
-  describe("initialize", () => {
-    it("should be callable without error", () => {
-      expect(() => (serviceManager as any).initialize()).not.toThrow();
-    });
-  });
-
-  describe("PROTOCOL", () => {
-    it("should have correct structure", () => {
-      expect(serviceManager.PROTOCOL).toHaveProperty("protocol_ver");
-      expect(serviceManager.PROTOCOL).toHaveProperty("provider");
-      expect(serviceManager.PROTOCOL.provider).toHaveProperty("id");
-      expect(serviceManager.PROTOCOL.provider).toHaveProperty("name");
-      expect(serviceManager.PROTOCOL.provider).toHaveProperty("desc");
-      expect(serviceManager.PROTOCOL.provider).toHaveProperty("version");
-    });
-  });
-
-  describe("setState", () => {
-    it("should only update state when different", () => {
-      const initialState = (serviceManager as any)._state;
-      (serviceManager as any)._setState(initialState);
-      expect((serviceManager as any)._state).toBe(initialState);
-    });
-
-    it("should update state when different", () => {
-      (serviceManager as any)._setState(ServerState.Starting);
-      expect((serviceManager as any)._state).toBe(ServerState.Starting);
-    });
-
-    it("should log state transition", () => {
-      (serviceManager as any)._setState(ServerState.Starting);
-      expect(mockLogger.info).toHaveBeenCalled();
-    });
-  });
-
-  describe("updateServiceName", () => {
-    it("should use service name from config when defined", () => {
-      expect(serviceManager.PROTOCOL.provider.name).toBe("test-service");
-    });
-
-    it("should use class name when config service_name is UNKNOWN_ATTRIBUTE", () => {
-      const configWithUnknown = {
-        getCoreConfig: () => ({
-          net: {
-            tcp_address: "127.0.0.1",
-            tcp_port: 0,
-            udp_address: "127.0.0.1",
-            udp_port: DEFAULT_DISCOVERY_PORT,
-          },
-          retry: {
-            interval: 10,
-            max_try: 2,
-            backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
-          },
-          service_name: "Unknown",
-        }),
-      } as unknown as ConfigManager;
-
-      const managerWithUnknown = new ServiceManager(
-        configWithUnknown,
-        mockLoggerManager,
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Invalid report data"),
       );
-      expect(managerWithUnknown.PROTOCOL.provider.name).toBe("ServiceManager");
+    });
+
+    it("should store valid report data", async () => {
+      const peer = { service: "TestService", instance: "inst-1" };
+      const reportData: ReportData = {
+        timestamp: Date.now(),
+        state: ExecutionState.Running,
+        ramUsed: 512,
+        ramFree: 1024,
+        cpuLoad: 45,
+        netTx: "1.00 MB",
+        netTxBytes: 1048576,
+        netRx: "2.00 MB",
+        netRxBytes: 2097152,
+      };
+
+      await serviceManager.gotReport({
+        peer,
+        api: "report",
+        args: reportData,
+        msgId: "msg-1",
+      });
+
+      const reports = serviceManager.getReports(peer);
+      expect(reports).toHaveLength(1);
+    });
+
+    it("should limit stored reports to 60", async () => {
+      const peer = { service: "TestService", instance: "inst-1" };
+      const reportData: ReportData = {
+        timestamp: Date.now(),
+        state: ExecutionState.Running,
+        ramUsed: 512,
+        ramFree: 1024,
+        cpuLoad: 45,
+        netTx: "1.00 MB",
+        netTxBytes: 1048576,
+        netRx: "2.00 MB",
+        netRxBytes: 2097152,
+      };
+
+      for (let i = 0; i < 65; i++) {
+        await serviceManager.gotReport({
+          peer,
+          api: "report",
+          args: { ...reportData, timestamp: Date.now() + i },
+          msgId: `msg-${i}`,
+        });
+      }
+
+      const reports = serviceManager.getReports(peer);
+      expect(reports.length).toBe(60);
     });
   });
 
-  describe("initializeMetrics", () => {
-    it("should initialize metrics", () => {
-      const metrics = serviceManager.getMetrics();
-      expect(metrics).toBeDefined();
+  
+
+  describe("state management", () => {
+    it("should report state via getState", () => {
+      expect(serviceManager.getState()).toBeDefined();
     });
   });
 
-  describe("services management", () => {
-    it("should have empty services map initially", () => {
-      expect((serviceManager as any)._services.size).toBe(0);
-    });
+  
 
-    it("should be able to add services", () => {
-      const mockTcp = {
+  describe("registrar", () => {
+    it("should register a provider and log", async () => {
+      const data = {
+        peer: { service: "TestService", instance: "inst-1" },
+        api: "register",
+        args: {
+          provider: { name: "TestService", id: "inst-1" },
+        },
+        msgId: "msg-1",
+      };
+
+      await serviceManager.registrar(data);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.stringContaining("registered"),
+      );
+    });
+  });
+
+  describe("buildAccessPointInfo", () => {
+    it("should add api routes to baseInfo", () => {
+      const baseInfo = { address: "127.0.0.1", port: 8080 };
+      const result = serviceManager.buildAccessPointInfo(baseInfo as any);
+      expect(result.api).toContain("register");
+      expect(result.api).toContain("report");
+    });
+  });
+
+  describe("reloading", () => {
+    it("should disable service manager discovery", async () => {
+      await serviceManager.reloading();
+      expect(mockNetConfig.sm_discovery).toBe(Symbol.for("None"));
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        expect.stringContaining("disabled"),
+      );
+    });
+  });
+
+  describe("starting", () => {
+    it("should call setApiChannel and _initializeBroadcastListener", async () => {
+      vi.spyOn(serviceManager as any, "setApiChannel").mockResolvedValue({
         start: vi.fn(),
+      } as any);
+      vi.spyOn(
+        serviceManager as any,
+        "_initializeBroadcastListener",
+      ).mockResolvedValue(undefined);
+
+      await serviceManager.starting();
+
+      expect(serviceManager["setApiChannel"]).toHaveBeenCalledWith(true);
+      expect(
+        serviceManager["_initializeBroadcastListener"],
+      ).toHaveBeenCalledWith("reception");
+    });
+  });
+
+  describe("stopping", () => {
+    it("should call setApiChannel with false", async () => {
+      vi.spyOn(serviceManager as any, "setApiChannel").mockResolvedValue({
         stop: vi.fn(),
-        name: "test-server",
-      };
+      } as any);
 
-      (serviceManager as any)._services.set("register", mockTcp);
-      expect((serviceManager as any)._services.get("register")).toBe(mockTcp);
-    });
+      await serviceManager.stopping();
 
-    it("should track multiple services", () => {
-      const tcp1 = createMockTcpServer("tcp-1");
-      const tcp2 = createMockTcpServer("tcp-2");
-      const udp1 = createMockUdpServer("udp-1");
-
-      (serviceManager as any)._services.set("tcp-1", tcp1);
-      (serviceManager as any)._services.set("tcp-2", tcp2);
-      (serviceManager as any)._services.set("udp-1", udp1);
-      expect((serviceManager as any)._services.size).toBe(3);
-      expect((serviceManager as any)._services.get("tcp-1")).toBe(tcp1);
-      expect((serviceManager as any)._services.get("tcp-2")).toBe(tcp2);
-      expect((serviceManager as any)._services.get("udp-1")).toBe(udp1);
-    });
-
-    it("should replace existing service with same key", () => {
-      const tcp1 = createMockTcpServer("tcp-1");
-      const tcp2 = createMockTcpServer("tcp-2");
-
-      (serviceManager as any)._services.set("register", tcp1);
-      expect((serviceManager as any)._services.get("register")).toBe(tcp1);
-
-      (serviceManager as any)._services.set("register", tcp2);
-      expect((serviceManager as any)._services.get("register")).toBe(tcp2);
-      expect((serviceManager as any)._services.size).toBe(1);
-    });
-  });
-
-  describe("setConfigManager", () => {
-    it("should be called in constructor", () => {
-      expect((serviceManager as any).configManager).toBeDefined();
-    });
-
-    it("should set configManager and update service name", () => {
-      const newConfigManager = {
-        getCoreConfig: () => ({
-          net: {
-            tcp_address: "127.0.0.1",
-            tcp_port: 0,
-            udp_address: "127.0.0.1",
-            udp_port: DEFAULT_DISCOVERY_PORT,
-          },
-          retry: {
-            interval: 10,
-            max_try: 2,
-            backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
-          },
-          service_name: "new-service-name",
-        }),
-      } as unknown as ConfigManager;
-
-      (serviceManager as any)._setConfigManager(newConfigManager);
-      expect((serviceManager as any).configManager).toBe(newConfigManager);
-      expect(serviceManager.PROTOCOL.provider.name).toBe("new-service-name");
-    });
-  });
-
-  describe("setLoggerManager", () => {
-    it("should be called in constructor", () => {
-      expect((serviceManager as any)._loggerManager).toBeDefined();
-    });
-
-    it("should set loggerManager and logger", () => {
-      const newLogger = {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      };
-
-      const newLoggerManager = {
-        getLogger: () => newLogger,
-        reload: vi.fn(),
-      } as unknown as LoggerManager;
-
-      (serviceManager as any)._setLoggerManager(newLoggerManager);
-      expect((serviceManager as any)._loggerManager).toBe(newLoggerManager);
-      expect((serviceManager as any).logger).toBe(newLogger);
-    });
-
-    it("should handle null loggerManager gracefully", () => {
-      (serviceManager as any)._setLoggerManager(null);
-      expect((serviceManager as any).logger).toBeDefined();
-    });
-  });
-
-  describe("logger operations", () => {
-    it("should have debug method on logger", () => {
-      mockLogger.debug = vi.fn();
-      (serviceManager as any).logger.debug("test");
-      expect(mockLogger.debug).toHaveBeenCalled();
-    });
-
-    it("should have info method on logger", async () => {
-      mockLogger.info = vi.fn();
-      await serviceManager.stop();
-      expect(mockLogger.info).toHaveBeenCalled();
-    });
-
-    it("should call info on logger for state transitions", () => {
-      mockLogger.info = vi.fn();
-      (serviceManager as any)._setState(ServerState.Retrying);
-      expect(mockLogger.info).toHaveBeenCalled();
-    });
-
-    it("should call info on logger for Error state", () => {
-      mockLogger.info = vi.fn();
-      (serviceManager as any)._setState(ServerState.Error);
-      expect(mockLogger.info).toHaveBeenCalled();
-    });
-  });
-
-  describe("state logging", () => {
-    it("should log state transition details", () => {
-      mockLogger.info = vi.fn();
-      (serviceManager as any)._setState(ServerState.Running);
-
-      const logMessage = mockLogger.info.mock.calls[0][0];
-      expect(logMessage).toContain("state:");
-      expect(logMessage).toContain("Stopped");
-      expect(logMessage).toContain("Running");
-    });
-
-    it("should not log when state hasn't changed", async () => {
-      mockLogger.info = vi.fn();
-      const initialState = (serviceManager as any)._state;
-
-      (serviceManager as any)._state = ServerState.Running;
-
-      await serviceManager.start();
-
-      expect((serviceManager as any)._state).toBe(ServerState.Running);
-    });
-
-    it("should handle none TCP listener error in catch block", async () => {
-      // Mock the logger to capture error messages
-      const errorSpy = vi.spyOn(serviceManager["logger"], "error");
-
-      // Call initializeBroadcastListener directly without TCP server that will cause failure
-      // Error thrown by empty tcpServer check in collectServerInfo().
-      const udpName = "failedOfReception";
-      await expect(() =>
-        (serviceManager as any)._initializeBroadcastListener(udpName),
-      ).rejects.toThrow("The <register> TCP server not initiated.");
-
-      // Verify the error was logged properly
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Failed to initialize the <${udpName}> broadcast UDP listener:`,
-        ),
-      );
-    });
-
-    it("should handle TCP listener initialization error in catch block", async () => {
-      // Mock the logger to capture error messages
-      const errorSpy = vi.spyOn(serviceManager["logger"], "error");
-
-      // Initialize the TCP server without address information.
-      let tcpName = "failedOfRegister";
-      await expect(() =>
-        (serviceManager as any)._initializeTcpListener(tcpName),
-      ).rejects.toThrow("TCP server failed to start");
-
-      // Verify the error was logged properly
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Failed to initialize the <${tcpName}> TCP listener:`,
-        ),
-      );
-    });
-
-    it("should handle none-address TCP listener error in catch block", async () => {
-      // Mock the logger to capture error messages
-      const errorSpy = vi.spyOn(serviceManager["logger"], "error");
-
-      // Create empty address TcpServer.
-      const tcpName = "registerWoAddress";
-      await (serviceManager as any)._initializeTcpListener(tcpName);
-      // Register the non-address TCP server under the expected name.
-      const tcpSrv = (serviceManager as any)._services.get(tcpName);
-      expect(tcpSrv.getServer().address()).toBeUndefined();
-      (serviceManager as any)._services.set("register", tcpSrv);
-
-      // Error thrown by empty address check in collectServerInfo().
-      const udpName = "failedOfReception";
-      await expect(() =>
-        (serviceManager as any)._initializeBroadcastListener(udpName),
-      ).rejects.toThrow("The <register> TCP server not running.");
-
-      // Verify the error was logged properly
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Failed to initialize the <failedOfReception> broadcast UDP listener:",
-        ),
-      );
-    });
-
-    it("should handle UDP listener initialization error in catch block", async () => {
-      // Mock the logger to capture error messages
-      const errorSpy = vi.spyOn(serviceManager["logger"], "error");
-
-      // Initialize a normal TCP server.
-      const tcpName = "register";
-      await (serviceManager as any)._initializeTcpListener(tcpName);
-      // Register the non-address TCP server under the expected name.
-      const tcpSrv = (serviceManager as any)._services.get(tcpName);
-      expect(tcpSrv.getServer().address()).toBeDefined();
-
-      const udpName = "failedOfReception";
-      await expect(() =>
-        (serviceManager as any)._initializeBroadcastListener(udpName),
-      ).rejects.toThrow("UDP server failed to start");
-
-      // Verify the error was logged properly
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Failed to initialize the <${udpName}> broadcast UDP listener:`,
-        ),
-      );
-    });
-
-    it("should transition to Running even when not in Stopped state initially", async () => {
-      (serviceManager as any)._state = ServerState.Starting;
-      await serviceManager.start();
-
-      expect((serviceManager as any)._state).toBe(ServerState.Running);
-    });
-  });
-
-  describe("stop with services", () => {
-    it("should stop all registered services", async () => {
-      const tcp1 = createMockTcpServer("tcp-1");
-      const tcp2 = createMockTcpServer("tcp-2");
-
-      (serviceManager as any)._services.set("tcp-1", tcp1);
-      (serviceManager as any)._services.set("tcp-2", tcp2);
-
-      await serviceManager.stop();
-
-      expect(tcp1.stop).toHaveBeenCalled();
-      expect(tcp2.stop).toHaveBeenCalled();
-    });
-
-    it("should handle service without stop method", async () => {
-      const serviceWithoutStop = {
-        name: "no-stop",
-      };
-
-      (serviceManager as any)._services.set("no-stop", serviceWithoutStop);
-      mockLogger.error = vi.fn();
-
-      await serviceManager.stop();
-
-      expect(mockLogger.error).not.toHaveBeenCalled();
-    });
-
-    it("should handle stop error gracefully", async () => {
-      const tcpWithError = {
-        stop: vi.fn().mockRejectedValue(new Error("Stop failed")),
-        name: "error-stop",
-      };
-
-      mockLogger.error = vi.fn();
-      (serviceManager as any)._services.set("error-stop", tcpWithError);
-
-      await serviceManager.stop();
-
-      const errorMessage = mockLogger.error.mock.calls[0][0];
-      expect(errorMessage).toContain("Failed to stop service");
-      expect(errorMessage).toContain("Stop failed");
-    });
-  });
-
-  describe("full lifecycle", () => {
-    it("should complete full start -> stop lifecycle", async () => {
-      expect((serviceManager as any)._state).toBe(ServerState.Stopped);
-
-      (serviceManager as any).initialized = true;
-      (serviceManager as any)._services.set("tcp-1", mockTcpServer);
-      (serviceManager as any)._services.set("udp-1", mockUdpServer);
-      await serviceManager.start();
-
-      expect((serviceManager as any)._state).toBe(ServerState.Running);
-
-      await serviceManager.stop();
-      expect((serviceManager as any)._state).toBe(ServerState.Stopped);
+      expect(serviceManager["setApiChannel"]).toHaveBeenCalledWith(false);
     });
   });
 });

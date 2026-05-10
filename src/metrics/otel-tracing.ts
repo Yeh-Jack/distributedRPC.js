@@ -3,111 +3,63 @@
  * Provides comprehensive distributed tracing with automatic span creation and context propagation.
  * @module otel-tracing
  */
-
 import {
-  trace,
+  Context,
   Span,
   SpanKind,
   SpanStatusCode,
-  Context,
-  createContextKey,
+  Tracer,
+  context,
+  trace,
 } from "@opentelemetry/api";
-import { UNKNOWN_ATTRIBUTE, ServerState } from "../types/basal-protocol";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc";
+import { resourceFromAttributes } from "@opentelemetry/resources";
+import {
+  ConsoleSpanExporter,
+  NodeTracerProvider,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-node";
+
+import { NetworkDirection } from "../network/network-events";
+import { AppEnv, NetworkProtocol, getAppEnv } from "../types/basal-protocol";
+import {
+  ProviderState,
+  DEFAULT_RESOURCE,
+  ProviderAttributeValue,
+} from "../provider/provider-info";
 
 /**
- * Context keys for OpenTelemetry propagation
+ * Options for creating network-related spans with protocol and direction metadata.
  */
-export const SERVICE_NAME_KEY = createContextKey("service.name");
-export const SERVICE_ID_KEY = createContextKey("service.instance.id");
-export const SERVER_STATE_KEY = createContextKey("server.state");
-
-/**
- * Tracing configuration options
- */
-export type SpanAttributeValue = string | number | boolean;
-
-export interface TracingConfig {
-  serviceName?: string;
-  serviceVersion?: string;
-  serviceInstanceId?: string;
-  enabled?: boolean;
+export interface NetworkSpanOptions {
+  /** Optional descriptive message for the span. */
+  message?: string;
+  /** Target or source address for the network operation. */
+  address?: string;
+  /** Target or source port for the network operation. */
+  port?: number;
+  /** Network protocol being used (TCP or UDP). */
+  protocol?: NetworkProtocol;
+  /** Direction of the network traffic (inbound or outbound). */
+  direction?: NetworkDirection;
+  /** Additional attributes to attach to the span. */
+  attributes?: Record<string, ProviderAttributeValue>;
+  /** Parent span or context for trace propagation. */
+  parent?: Span | Context;
 }
 
 /**
- * Default tracing configuration
+ * Options for creating general-purpose spans with kind and timing configuration.
  */
-const DEFAULT_CONFIG: Required<TracingConfig> = {
-  serviceName: UNKNOWN_ATTRIBUTE,
-  serviceVersion: "1.0.0",
-  serviceInstanceId: UNKNOWN_ATTRIBUTE,
-  enabled: true,
-};
-
-/**
- * Centralized server state tracking for OpenTelemetry span attributes.
- *
- * This utility class maintains server state information that is automatically
- * included as attributes in all created spans. It provides a thread-safe way
- * to track state transitions and make this information available to the
- * tracing system.
- *
- * Key Features:
- * - Thread-safe state management
- * - Automatic attribute inclusion in spans
- * - Service identity tracking
- * - State change notifications to tracing system
- *
- * @remarks
- * ServerStateSpan is used throughout the distributed RPC system to ensure
- * that all spans include relevant server state information. This enables
- * better observability and debugging capabilities by correlating spans
- * with the server's operational state.
- *
- * @example
- * ```typescript
- * // Update server state
- * ServerStateSpan.setState(ServerState.Listening, "OrderService", "inst-1");
- *
- * // Get common attributes for span creation
- * const attributes = ServerStateSpan.getCommonAttributes();
- * // Returns: { "service.name": "OrderService", "service.instance.id": "inst-1", "server.state": "Listening" }
- * ```
- */
-export class ServerStateSpan {
-  private static _state: ServerState = ServerState.Stopped;
-  private static _serviceName: string = UNKNOWN_ATTRIBUTE;
-  private static _serviceId: string = UNKNOWN_ATTRIBUTE;
-
-  /**
-   * Sets the server state for span attributes
-   */
-  public static setState(
-    state: ServerState,
-    serviceName?: string,
-    serviceId?: string,
-  ): void {
-    this._state = state;
-    if (serviceName) this._serviceName = serviceName;
-    if (serviceId) this._serviceId = serviceId;
-  }
-
-  /**
-   * Gets current server state
-   */
-  public static getState(): ServerState {
-    return this._state;
-  }
-
-  /**
-   * Gets common span attributes
-   */
-  public static getCommonAttributes(): Record<string, SpanAttributeValue> {
-    return {
-      "service.name": this._serviceName,
-      "service.instance.id": this._serviceId,
-      "server.state": this._state,
-    };
-  }
+export interface SpanOptions {
+  /** The kind of span (e.g., INTERNAL, SERVER, CLIENT). Defaults to INTERNAL. */
+  kind?: SpanKind;
+  /** Additional attributes to attach to the span. */
+  attributes?: Record<string, ProviderAttributeValue>;
+  /** Parent span or context for trace propagation. */
+  parent?: Span | Context;
+  /** Explicit start time for the span in milliseconds since epoch. */
+  startTime?: number;
 }
 
 /**
@@ -134,166 +86,174 @@ export class ServerStateSpan {
  * @example
  * ```typescript
  * // Initialize tracing
- * OtelTracing.configure({
- *   serviceName: "OrderService",
- *   serviceVersion: "1.0.0",
- * });
+ * OtelTracing.getInstance(providerId, { enabled: true, serviceName: "OrderService", serviceVersion: "1.0.0" }, configManager);
  *
  * // Create network span
- * const span = OtelTracing.createNetworkSpan("broadcast", "udp", {
- *   attributes: { "network.type": "discovery" },
+ * const span = OtelTracing.getInstance(providerId).createNetworkSpan("broadcast", {
+ * attributes: { "network.type": "discovery" },
  * });
  *
  * // Create RPC span
- * const rpcSpan = OtelTracing.createRpcSpan("processPayment", {
- *   attributes: { "rpc.method": "PaymentService.charge" },
+ * const rpcSpan = OtelTracing.getInstance(providerId).createSpan("processPayment", {
+ * attributes: { "rpc.method": "PaymentService.charge" },
  * });
  * ```
  */
-export class OtelTracing {
-  private static _config: Required<TracingConfig> = DEFAULT_CONFIG;
+export class OtelTracer {
+  private static _instances: Map<string, OtelTracer> = new Map();
 
   /**
-   * Initializes the tracing configuration
+   * Gets or creates a singleton OtelTracer instance for the given provider ID.
+   *
+   * @param providerId - Unique identifier for the provider creating the tracer.
+   * @param provider - Optional ProviderState instance for configuration.
+   * @returns The singleton OtelTracer instance.
    */
-  public static configure(config: TracingConfig): void {
-    this._config = { ...DEFAULT_CONFIG, ...config };
-    ServerStateSpan.setState(
-      ServerState.Stopped,
-      this._config.serviceName,
-      this._config.serviceInstanceId,
-    );
+  public static getInstance(
+    providerId: string,
+    provider?: ProviderState,
+  ): OtelTracer {
+    let tracer = OtelTracer._instances.get(providerId);
+    if (!tracer) {
+      tracer = new OtelTracer(provider || new ProviderState(DEFAULT_RESOURCE));
+      OtelTracer._instances.set(providerId, tracer);
+    }
+    return tracer;
   }
 
-  /**
-   * Gets the configured service name
-   */
-  public static getServiceName(): string {
-    return this._config.serviceName;
+  private _providerState!: ProviderState;
+  private _tracerProvider?: NodeTracerProvider;
+  private _tracer?: Tracer;
+
+  public constructor(provider: ProviderState) {
+    this.configure(provider);
   }
 
-  /**
-   * Gets the configured service instance ID
-   */
-  public static getServiceInstanceId(): string {
-    return this._config.serviceInstanceId;
+  public configure(provider: ProviderState): void {
+    this.setProviderState(provider);
+    const { enabled, ...rest } = provider.getProvider();
+    if (!enabled) {
+      return;
+    }
+
+    try {
+      const resource = resourceFromAttributes({ ...rest });
+      // Use ConsoleSpanExporter for 'development' environment, otherwise use OTLPTraceExporter.
+      const exporter =
+        AppEnv.development === getAppEnv()
+          ? new ConsoleSpanExporter()
+          : new OTLPTraceExporter({ url: "http://localhost:4317" });
+
+      const spanProcessor = new SimpleSpanProcessor(exporter);
+      const tracerProvider = new NodeTracerProvider({
+        resource: resource,
+        spanProcessors: [spanProcessor],
+      });
+      this.setTracerProvider(tracerProvider);
+    } catch (error) {
+      console.error("Failed to initialize OpenTelemetry tracing:", error);
+    }
   }
 
-  /**
-   * Creates a new span with standard attributes
-   */
-  public static createSpan(
-    name: string,
-    options: {
-      kind?: SpanKind;
-      attributes?: Record<string, SpanAttributeValue>;
-      parent?: Span | Context;
-      startTime?: number;
-    } = {},
-  ): Span {
-    if (!this._config.enabled) {
+  public createSpan(name: string, options: SpanOptions = {}): Span {
+    const { enabled } = this._providerState.getProvider();
+    if (!enabled || !this._tracer) {
       return trace.getTracer("disabled").startSpan(name);
     }
 
-    const tracer = trace.getTracer("distributed-rpc");
-    const spanOptions: any = {
+    const spanAttr = this._providerState.getCommonAttributes();
+    const attributes: Record<string, ProviderAttributeValue> = {
+      ...spanAttr,
+      ...options?.attributes,
+    };
+
+    const spanOptions: SpanOptions = {
       kind: options.kind || SpanKind.INTERNAL,
+      ...options,
     };
+    spanOptions.attributes = attributes;
+    spanOptions.startTime = Date.now();
 
-    if (options.parent) {
-      spanOptions.parent = options.parent;
-    }
-
-    const attributes: Record<string, SpanAttributeValue> = {
-      "service.name": this._config.serviceName,
-      "service.instance.id": this._config.serviceInstanceId,
-      ...ServerStateSpan.getCommonAttributes(),
-    };
-
-    // Add optional attributes safely
-    if (options.attributes) {
-      Object.entries(options.attributes).forEach(([key, value]) => {
-        if (value !== undefined) {
-          attributes[key] = value;
-        }
-      });
-    }
-
-    return tracer.startSpan(name, attributes, spanOptions);
+    return this._tracer.startSpan(name, spanOptions);
   }
 
   /**
-   * Creates a span for network operations
+   * Creates a span for network operations with TCP/UDP protocol metadata.
+   *
+   * @param operation - The network operation name (e.g., "connect", "write", "read").
+   * @param options - Network span options including address, port, protocol, and direction.
+   * @returns A new Span instance for the network operation.
    */
-  public static createNetworkSpan(
+  public createNetworkSpan(
     operation: string,
-    networkType: "tcp" | "udp" | "broadcast",
-    options: {
-      address?: string;
-      port?: number;
-      direction?: "inbound" | "outbound";
-      attributes?: Record<string, SpanAttributeValue>;
-      parent?: Span | Context;
-    } = {},
+    options: NetworkSpanOptions = {},
   ): Span {
-    return this.createSpan(`network.${networkType}.${operation}`, {
+    let peer: Record<string, ProviderAttributeValue> = {};
+    if (options.address) {
+      const dest = `${options.address}:${options.port}`;
+      if (options.direction === NetworkDirection.In) {
+        peer["network.peer.source"] = dest;
+      } else {
+        peer["network.peer.target"] = dest;
+      }
+      peer["network.peer.address"] = options.address;
+      peer["network.peer.port"] = options.port || 0;
+    }
+
+    const spanOptions: SpanOptions = {
       kind: SpanKind.SERVER,
       attributes: {
-        "network.type": networkType,
         "network.operation": operation,
-        "network.direction": options.direction || "inbound",
-        ...(options.address && { "network.peer.address": options.address }),
-        ...(options.port && { "network.peer.port": options.port }),
-        ...options.attributes,
+        "network.protocol": options.protocol || NetworkProtocol.TCP,
+        "network.direction": options.direction || NetworkDirection.In,
+        ...peer,
+        ...options?.attributes,
       },
       parent: options.parent,
-    });
-  }
-
-  /**
-   * Creates a span for UDP broadcast discovery
-   */
-  public static createBroadcastSpan(
-    operation: string,
-    options: {
-      message?: string;
-      address?: string;
-      port?: number;
-      direction?: "inbound" | "outbound";
-      attributes?: Record<string, SpanAttributeValue>;
-      parent?: Span | Context;
-    } = {},
-  ): Span {
-    const attributes: Record<string, SpanAttributeValue> = {
-      "network.broadcast.type": "service_discovery",
-      "messaging.protocol": "udp",
     };
-
-    if (options.message) {
-      attributes["network.broadcast.message"] = options.message;
-    }
-
-    if (options.attributes) {
-      Object.entries(options.attributes).forEach(([key, value]) => {
-        if (value !== undefined) {
-          attributes[key] = value;
-        }
-      });
-    }
-
-    return this.createNetworkSpan(`broadcast.${operation}`, "udp", {
-      attributes,
-      address: options.address,
-      port: options.port,
-      direction: options.direction,
-      parent: options.parent,
-    });
+    return this.createSpan(`network.${operation}`, spanOptions);
   }
 
   /**
-   * Records an exception on a span
+   * Creates a span for UDP broadcast discovery operations.
+   * Sets protocol to UDP and prefixes operation name with "broadcast.".
+   *
+   * @param operation - The broadcast operation name.
+   * @param options - Network span options for the broadcast.
+   * @returns A new Span instance for the broadcast operation.
    */
-  public static recordException(
+  public createBroadcastSpan(
+    operation: string,
+    options: NetworkSpanOptions = {},
+  ): Span {
+    options.protocol = NetworkProtocol.UDP;
+    return this.createNetworkSpan(`broadcast.${operation}`, options);
+  }
+
+  /**
+   * Gets the provider identity string from the provider state.
+   *
+   * @returns The provider identity identifier.
+   */
+  public getProviderIdentity(): string {
+    return this._providerState.getProviderIdentity();
+  }
+
+  /**
+   * Gets the ProviderState instance.
+   */
+  public getProviderState(): ProviderState {
+    return this._providerState;
+  }
+
+  /**
+   * Records an exception on a span and sets the span status to ERROR.
+   *
+   * @param span - The span to record the exception on.
+   * @param error - The error/exception to record.
+   * @param attributes - Optional additional attributes to set on the status.
+   */
+  public recordException(
     span: Span,
     error: Error,
     attributes?: Record<string, any>,
@@ -307,161 +267,30 @@ export class OtelTracing {
   }
 
   /**
-   * Sets server state on all active spans
+   * Sets the provider state for this tracer.
+   *
+   * @param provider - The ProviderState instance to use.
    */
-  public static setServerState(
-    state: ServerState,
-    serviceName?: string,
-    serviceId?: string,
-  ): void {
-    ServerStateSpan.setState(state, serviceName, serviceId);
+  public setProviderState(provider: ProviderState): void {
+    this._providerState = provider;
   }
-}
 
-/**
- * Generates a correlation ID for tracing purposes
- */
-export function generateCorrelationId(): string {
-  return `trace_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
-}
-
-/**
- * Decorator for automatic span creation on methods
- */
-export function traceMethod(
-  name?: string,
-  options: {
-    kind?: SpanKind;
-    attributes?: Record<string, SpanAttributeValue>;
-  } = {},
-) {
-  return function <T extends (...args: any[]) => Promise<any>>(
-    target: any,
-    propertyKey: string,
-    descriptor: TypedPropertyDescriptor<T>,
-  ) {
-    const originalMethod = descriptor.value!;
-    const methodName = name || propertyKey;
-    const className = target.constructor.name;
-
-    descriptor.value = async function (this: any, ...args: any[]) {
-      const span = OtelTracing.createSpan(`${className}.${methodName}`, {
-        kind: options.kind || SpanKind.INTERNAL,
-        attributes: {
-          "method.class": className,
-          "method.name": methodName,
-          "correlation.id": generateCorrelationId(),
-          ...options.attributes,
-        },
-      }) as any;
-
-      try {
-        const result = await originalMethod.apply(this, args);
-        span.setStatus({ code: SpanStatusCode.OK });
-        return result;
-      } catch (error) {
-        OtelTracing.recordException(span, error as Error);
-        throw error;
-      } finally {
-        span.end();
-      }
-    } as T;
-
-    return descriptor;
-  };
-}
-
-/**
- * Class decorator for automatic method instrumentation
- */
-export function traceable(componentName: string) {
-  return function <T extends { new (...args: any[]): {} }>(constructor: T) {
-    // Add component metadata
-    const originalConstructor = constructor;
-    const newConstructor = function (...args: any[]) {
-      const instance = new originalConstructor(...args);
-      // Add metadata for instrumentation
-      (instance as any).__componentName = componentName;
-      (instance as any).__instrumented = true;
-      return instance;
-    };
-
-    // Copy static properties
-    Object.setPrototypeOf(newConstructor, originalConstructor);
-    Object.defineProperty(newConstructor, "name", {
-      value: originalConstructor.name,
-    });
-
-    return newConstructor;
-  };
-}
-
-/**
- * Utility class for initializing OpenTelemetry tracing
- */
-/**
- * Specialized tracer for distributed RPC operation tracing.
- *
- * This class provides RPC-specific tracing capabilities built on top of
- * OpenTelemetry's tracing API. It offers domain-specific methods for
- * creating spans related to RPC operations, service-to-service communication,
- * and distributed transaction tracing.
- *
- * Key Features:
- * - RPC operation span creation
- * - Service-to-service communication tracing
- * - Distributed transaction correlation
- * - Service mesh integration support
- * - Automatic error handling and status reporting
- *
- * @remarks
- * OtelTracer is designed specifically for distributed RPC scenarios where
- * spans need to represent high-level business operations rather than just
- * technical operations. It provides semantic conventions for RPC tracing
- * and integrates with the broader distributed tracing ecosystem.
- *
- * @example
- * ```typescript
- * const tracer = new OtelTracer({
- *   serviceName: "OrderService",
- * });
- *
- * // Trace RPC operation
- * const span = tracer.startRpcSpan("processOrder", {
- *   parentSpan: parentContext,
- *   attributes: { "rpc.service": "PaymentService", "rpc.method": "charge" },
- * });
- *
- * try {
- *   // RPC logic here
- *   span.setStatus({ code: SpanStatusCode.OK });
- * } catch (error) {
- *   tracer.recordError(span, error);
- *   span.setStatus({ code: SpanStatusCode.ERROR });
- * } finally {
- *   span.end();
- * }
- * ```
- */
-export class OtelTracer {
-  private static _initialized: boolean = false;
+  private setTracerProvider(provider: NodeTracerProvider): void {
+    this._tracerProvider = provider;
+    this._tracer = provider.getTracer("distributed-rpc");
+  }
 
   /**
-   * Initializes OpenTelemetry tracing with configuration
+   * Shuts down the tracer provider, flushing any pending spans.
+   * After shutdown, the tracer will be disabled.
+   *
+   * @returns Promise that resolves when shutdown is complete.
    */
-  public static initialize(config: TracingConfig): void {
-    if (OtelTracer._initialized) {
-      return;
+  public async shutdown(): Promise<void> {
+    if (this._tracerProvider) {
+      await this._tracerProvider.shutdown();
+      this._tracerProvider = undefined;
+      this._tracer = undefined;
     }
-
-    OtelTracing.configure(config);
-    OtelTracer._initialized = true;
-  }
-
-  /**
-   * Checks if tracing is initialized
-   */
-  public static isInitialized(): boolean {
-    return OtelTracer._initialized;
   }
 }

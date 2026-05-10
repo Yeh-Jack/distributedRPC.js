@@ -74,6 +74,9 @@ web_modules/
 .env.*
 !.env.example
 
+# Dev container environment variable file
+devcontainer.env
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache

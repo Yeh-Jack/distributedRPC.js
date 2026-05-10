@@ -1,7 +1,7 @@
 import * as dgram from "dgram";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NetworkEvent } from "../../network/network-events";
-import { ServerState } from "../../types/basal-protocol";
+import { ExecutionState as ServerState } from "../../types/basal-protocol";
 import { UdpServer } from "../../network/udp-server";
 import { ConfigManager, DEFAULT_DISCOVERY_PORT } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
@@ -31,6 +31,17 @@ vi.mock("../../metrics/otel-metrics", () => ({
   retryAttempts: {
     add: vi.fn(),
   },
+}));
+
+// Mock abort-aware to control sleep behavior
+vi.mock("../../common/abort-aware", () => ({
+  isAbortError: vi
+    .fn()
+    .mockImplementation((err: any) => err?.name === "AbortError"),
+  sleep: vi.fn().mockImplementation((ms: number) => {
+    vi.advanceTimersByTime(ms);
+    return Promise.resolve();
+  }),
 }));
 
 describe("UdpServer", () => {
@@ -73,10 +84,21 @@ describe("UdpServer", () => {
     const mockConfigManager = {
       getCoreConfig: () => ({
         net: {
-          tcp_address: "127.0.0.1",
-          tcp_port: 0,
-          udp_address: "127.0.0.1",
-          udp_port: DEFAULT_DISCOVERY_PORT,
+          tcp: {
+            address: "127.0.0.1",
+            port: 0,
+            client: {
+              timeout: 10000,
+              keep_alive: false,
+              keep_alive_initial_delay: 0,
+            },
+          },
+          udp: {
+            address: "127.0.0.1",
+            port: DEFAULT_DISCOVERY_PORT,
+          },
+          sm_discovery: Symbol("sm_discovery"),
+          sm_port: DEFAULT_DISCOVERY_PORT,
         },
         retry: {
           interval: 10,
@@ -85,20 +107,17 @@ describe("UdpServer", () => {
         },
         service_name: "test-udp",
       }),
-    } as unknown as ConfigManager;
-
-    const mockLoggerManager = {
       getLogger: () => ({
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
         debug: vi.fn(),
       }),
-    } as unknown as LoggerManager;
+    } as unknown as ConfigManager;
 
     sockets = [];
     vi.mocked(dgram.createSocket).mockImplementation(() => createMockSocket());
-    udpServer = new UdpServer(mockConfigManager, mockLoggerManager);
+    udpServer = new UdpServer(mockConfigManager);
   });
 
   it("should initialize with correct properties", () => {
@@ -227,17 +246,34 @@ describe("UdpServer", () => {
     const testConfigManager = {
       getCoreConfig: () => ({
         net: {
-          tcp_address: "127.0.0.1",
-          tcp_port: 0,
-          udp_address: "127.0.0.1",
-          udp_port: DEFAULT_DISCOVERY_PORT,
+          tcp: {
+            address: "127.0.0.1",
+            port: 0,
+            client: {
+              timeout: 10000,
+              keep_alive: false,
+              keep_alive_initial_delay: 0,
+            },
+          },
+          udp: {
+            address: "127.0.0.1",
+            port: DEFAULT_DISCOVERY_PORT,
+          },
+          sm_discovery: Symbol("sm_discovery"),
+          sm_port: DEFAULT_DISCOVERY_PORT,
         },
         retry: {
           interval: 10,
-          max_try: 2,
+          max_retries: 2,
           backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
         },
         service_name: "test-exhaust",
+      }),
+      getLogger: () => ({
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
       }),
     } as unknown as ConfigManager;
 
@@ -250,7 +286,7 @@ describe("UdpServer", () => {
       }),
     } as unknown as LoggerManager;
 
-    const testUdpServer = new UdpServer(testConfigManager, testLoggerManager);
+    const testUdpServer = new UdpServer(testConfigManager);
 
     const p = testUdpServer.start();
     await expect(p).rejects.toThrow("busy");
@@ -320,10 +356,21 @@ describe("UdpServer", () => {
     const errorConfigManager = {
       getCoreConfig: () => ({
         net: {
-          tcp_address: "127.0.0.1",
-          tcp_port: 0,
-          udp_address: "127.0.0.1",
-          udp_port: DEFAULT_DISCOVERY_PORT,
+          tcp: {
+            address: "127.0.0.1",
+            port: 0,
+            client: {
+              timeout: 10000,
+              keep_alive: false,
+              keep_alive_initial_delay: 0,
+            },
+          },
+          udp: {
+            address: "127.0.0.1",
+            port: DEFAULT_DISCOVERY_PORT,
+          },
+          sm_discovery: Symbol("sm_discovery"),
+          sm_port: DEFAULT_DISCOVERY_PORT,
         },
         retry: {
           interval: 10,
@@ -331,6 +378,12 @@ describe("UdpServer", () => {
           backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
         },
         service_name: "test-sync-error",
+      }),
+      getLogger: () => ({
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
       }),
     } as unknown as ConfigManager;
 
@@ -343,10 +396,7 @@ describe("UdpServer", () => {
       }),
     } as unknown as LoggerManager;
 
-    const errorUdpServer = new UdpServer(
-      errorConfigManager,
-      errorLoggerManager,
-    );
+    const errorUdpServer = new UdpServer(errorConfigManager);
 
     errorUdpServer.on(NetworkEvent.Error, () => {
       console.log("Handled error event");
@@ -433,17 +483,28 @@ describe("UdpServer", () => {
 
     await udpServer.stop();
     await expect(startPromise).resolves.toBeUndefined();
-    expect(udpServer.getState()).toBe(ServerState.Stopped);
+    expect(udpServer.getState()).toBe(ServerState.Error);
   });
 
   it("should accept custom name parameter", () => {
     const localMockConfigManager = {
       getCoreConfig: () => ({
         net: {
-          tcp_address: "127.0.0.1",
-          tcp_port: 0,
-          udp_address: "127.0.0.1",
-          udp_port: DEFAULT_DISCOVERY_PORT,
+          tcp: {
+            address: "127.0.0.1",
+            port: 0,
+            client: {
+              timeout: 10000,
+              keep_alive: false,
+              keep_alive_initial_delay: 0,
+            },
+          },
+          udp: {
+            address: "127.0.0.1",
+            port: DEFAULT_DISCOVERY_PORT,
+          },
+          sm_discovery: Symbol("sm_discovery"),
+          sm_port: DEFAULT_DISCOVERY_PORT,
         },
         retry: {
           interval: 10,
@@ -452,15 +513,16 @@ describe("UdpServer", () => {
         },
         service_name: "test-udp",
       }),
+      getLogger: () => ({
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      }),
     } as unknown as ConfigManager;
-
-    const localMockLoggerManager = {
-      getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-    } as unknown as LoggerManager;
 
     const namedServer = new UdpServer(
       localMockConfigManager,
-      localMockLoggerManager,
       "my-custom-udp-server",
     );
     expect((namedServer as any).name).toBe("my-custom-udp-server");
@@ -470,10 +532,21 @@ describe("UdpServer", () => {
     const localMockConfigManager = {
       getCoreConfig: () => ({
         net: {
-          tcp_address: "127.0.0.1",
-          tcp_port: 0,
-          udp_address: "127.0.0.1",
-          udp_port: DEFAULT_DISCOVERY_PORT,
+          tcp: {
+            address: "127.0.0.1",
+            port: 0,
+            client: {
+              timeout: 10000,
+              keep_alive: false,
+              keep_alive_initial_delay: 0,
+            },
+          },
+          udp: {
+            address: "127.0.0.1",
+            port: DEFAULT_DISCOVERY_PORT,
+          },
+          sm_discovery: Symbol("sm_discovery"),
+          sm_port: DEFAULT_DISCOVERY_PORT,
         },
         retry: {
           interval: 10,
@@ -482,16 +555,15 @@ describe("UdpServer", () => {
         },
         service_name: "test-udp",
       }),
+      getLogger: () => ({
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      }),
     } as unknown as ConfigManager;
 
-    const localMockLoggerManager = {
-      getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-    } as unknown as LoggerManager;
-
-    const defaultServer = new UdpServer(
-      localMockConfigManager,
-      localMockLoggerManager,
-    );
+    const defaultServer = new UdpServer(localMockConfigManager);
     expect((defaultServer as any).name).toBe("udp-server");
   });
 });

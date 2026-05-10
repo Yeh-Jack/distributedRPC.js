@@ -1,30 +1,29 @@
 import { Server } from "net";
 import { inject, injectable } from "inversify";
-import { DetectedResourceAttributes } from "@opentelemetry/resources";
-import { ObservableCallback } from "@opentelemetry/api";
 
+import { TYPES } from "../aop/di-types";
+import { createNamedUdpServer } from "../aop/container";
+import { BroadcastUdpServer } from "../network/broadcast-udp-server";
+import { TcpServer } from "../network/tcp-server";
+import { ProviderTask, ServiceProvider } from "../provider/service-provider";
 import {
   AccessPoint,
-  AppEnv,
+  ApiCall,
   BasalProtocol,
-  BroadcastResponse,
-  ServerState,
-  generateInstanceId,
-  getAppEnv,
-  UNKNOWN_ATTRIBUTE,
+  IdGenerator,
+  PeerIdentity,
+  ProviderConnectInfo,
+  RegisterInfo,
+  ReportData,
+  ServiceManagerDiscovery,
+  FOLLOW_UP,
 } from "../types/basal-protocol";
-import { TYPES } from "../aop/di-types";
-import { createNamedTcpServer, createNamedUdpServer } from "../aop/container";
-import { ConfigManager } from "../common/config";
-import { LoggerManager } from "../common/logger";
 import {
-  OtelMeterics,
-  listenerState,
-  ServerStateMetric,
-} from "../metrics/otel-metrics";
-import { BroadcastUdpServer } from "../network/broadcast-udp-server";
-import { NetworkProtocol, getHostIP } from "../network/network-events";
-import { TcpServer } from "../network/tcp-server";
+  BroadcastResponse260321,
+  ServiceManagerConfig,
+  SpecServiceManager260321,
+  SPEC_SVC_MGR_260321,
+} from "./api-spec-260321";
 
 /**
  * Central orchestration service for distributed RPC system management.
@@ -59,88 +58,105 @@ import { TcpServer } from "../network/tcp-server";
  * ```
  */
 @injectable()
-export class ServiceManager {
-  public readonly PROTOCOL: BasalProtocol = {
-    protocol_ver: "1.0.0",
-    provider: {
-      id: generateInstanceId(),
-      name: this.constructor.name,
-      desc: "Service Manager for orchestrating services.",
-      version: "1.0.0",
-    },
-  };
+export class ServiceManager extends ServiceProvider {
+  protected override readonly PROTOCOL: BasalProtocol &
+    SpecServiceManager260321;
+  protected override configManager: ServiceManagerConfig;
 
-  protected configManager!: ConfigManager;
-  protected logger!: ReturnType<LoggerManager["getLogger"]>;
-
-  private _initialized: boolean = false;
-  private _loggerManager!: LoggerManager;
-  private _state: ServerState = ServerState.Stopped;
+  /** Registered service providers indexed by service name and instance ID. */
+  private _services: Map<string, any> = new Map();
+  /** Reports received from service providers, indexed by service name and instance ID. */
+  private _reports: Map<string, Map<string, ReportData[]>> = new Map();
 
   // Resources should be released during shutdown.
-  private _metrics!: OtelMeterics;
-  private _metricsCallback?: ObservableCallback;
-  private _services: Map<string, any> = new Map();
 
   /**
-   * Creates a ServiceManager instance with the provided dependencies.
-   *
-   * @param configManager - The configuration manager for retrieving service settings.
-   * @param loggerManager - The logger manager for obtaining the application logger.
+   * Creates a ServiceManager instance.
+   * @param idGenerator - The ID generator for creating message and instance IDs
    */
   public constructor(
-    @inject(TYPES.ConfigManager) configManager: ConfigManager,
-    @inject(TYPES.LoggerManager) loggerManager: LoggerManager,
+    @inject(TYPES.IdGenerator) protected idGenerator: IdGenerator,
   ) {
-    this._setConfigManager(configManager);
-    this._setLoggerManager(loggerManager);
-    this._initializeMetrics();
+    super(idGenerator);
+    const serviceName = this.constructor.name;
+    this.PROTOCOL = {
+      ...SPEC_SVC_MGR_260321,
+      provider: {
+        id: idGenerator.shortId(),
+        name: serviceName,
+        desc: "Service Manager for orchestrating services.",
+        version: "1.0.0",
+      },
+    };
+    this.configManager = new ServiceManagerConfig(serviceName);
   }
 
   /**
-   * Get the unique identity string of the service instance with `<>`.
+   * Retrieves provider connection information for a peer.
    *
-   * @returns The unique identity string.
+   * @param data - The API call containing peer information
+   * @returns Provider connection info if the peer is registered, undefined otherwise
    */
-  protected getArrowedIdentity(): string {
-    return `<${this.getIdentity()}>`;
+  protected override async askProviderInfo(
+    data: ApiCall,
+  ): Promise<ProviderConnectInfo | undefined> {
+    const register: RegisterInfo | undefined = this.getRegisterInfo(data.peer);
+    return register ? register.provider : undefined;
   }
 
   /**
-   * Get the unique identity string of the service instance.
+   * Clears all reports for a specific provider instance.
    *
-   * @returns The unique identity string.
+   * @param peer - The peer identity containing service name and instance ID
    */
-  protected getIdentity(): string {
-    return `${this.PROTOCOL.provider.name}-${this.PROTOCOL.provider.id}`;
+  public clearReports(peer: PeerIdentity): void {
+    const serviceGroup = this._reports.get(peer.service);
+    if (serviceGroup) {
+      serviceGroup.delete(peer.instance);
+      if (serviceGroup.size === 0) {
+        this._reports.delete(peer.service);
+      }
+    }
   }
 
   /**
-   * Returns the metrics instance for this service.
+   * Retrieves registration info for a peer.
    *
-   * @returns The OtelMeterics instance.
+   * @param peer - The peer identity to look up
+   * @returns RegisterInfo if found, undefined otherwise
    */
-  public getMetrics(): OtelMeterics {
-    return this._metrics;
+  protected getRegisterInfo(peer: PeerIdentity): RegisterInfo | undefined {
+    const svcGroup = this._services.get(peer.service);
+    if (!svcGroup) return;
+    return svcGroup[peer.instance];
   }
 
   /**
-   * Returns the configured service name.
+   * Gets all registered services with their instance IDs.
    *
-   * @returns The service name from configuration.
+   * @returns Array of peer identities
    */
-  public getServiceName(): string {
-    return this.configManager.getCoreConfig().service_name;
+  public getReportedInstances(): PeerIdentity[] {
+    const instances: PeerIdentity[] = [];
+    for (const [serviceName, serviceGroup] of this._reports.entries()) {
+      for (const instanceId of serviceGroup.keys()) {
+        instances.push({ service: serviceName, instance: instanceId });
+      }
+    }
+    return instances;
   }
 
   /**
-   * Retrieves a registered TCP server by name.
+   * Gets all reports for a specific provider instance.
    *
-   * @param name - The name of the TCP server to retrieve.
-   * @returns The TcpServer instance or undefined if not found.
+   * @param peer - The peer identity containing service name and instance ID
+   * @returns Array of ReportData or empty array if no reports exist
    */
-  public getTcpServer(name: string): TcpServer | undefined {
-    return this._services.get(name) as TcpServer;
+  public getReports(peer: PeerIdentity): ReportData[] {
+    const serviceGroup = this._reports.get(peer.service);
+    if (!serviceGroup) return [];
+
+    return serviceGroup.get(peer.instance) || [];
   }
 
   /**
@@ -149,170 +165,157 @@ export class ServiceManager {
    * @param name - The name of the UDP server to retrieve.
    * @returns The BroadcastUdpServer instance or undefined if not found.
    */
-  public getUdpServer(name: string): BroadcastUdpServer | undefined {
-    return this._services.get(name) as BroadcastUdpServer | undefined;
+  public getTaskUdpServer(name: string): BroadcastUdpServer | undefined {
+    return this.tasks.get(name) as BroadcastUdpServer | undefined;
   }
 
-  /**
-   * Initializes additional components or services if needed.
-   *
-   * @remarks
-   * This method can be overridden by subclasses to add custom initialization logic.
-   */
-  protected initialize(): void {
-    // Placeholder for additional initialization logic if needed.
-  }
+  // --------------------------------------------
+  // API functions.
+  // --------------------------------------------
 
   /**
-   * Releases allocated resources including metrics and callbacks.
+   * Receives and stores report data from service providers.
    *
-   * @returns Promise that resolves when resources are released.
+   * @param data - The API call containing report data
    */
-  protected async releaseResources(): Promise<void> {
-    if (this._metrics) {
-      await this._metrics.shutdown();
-      this._metrics = undefined as unknown as OtelMeterics;
+  public async gotReport(data: ApiCall): Promise<void> {
+    const from = this.getPeerId(data);
+    const reportData: ReportData = data.args;
+
+    if (!reportData || typeof reportData !== "object") {
+      this.logger.warn(`Invalid report data received from ${from}`);
+      return;
     }
 
-    if (this._metricsCallback) {
-      listenerState.removeCallback(this._metricsCallback);
-      this._metricsCallback = undefined;
+    // Get service and instance info from the peer
+    const { service, instance } = data.peer;
+
+    // Initialize service group if not exists
+    let serviceGroup = this._reports.get(service);
+    if (!serviceGroup) {
+      serviceGroup = new Map();
+      this._reports.set(service, serviceGroup);
     }
 
-    this._initialized = false;
-  }
-
-  /**
-   * Reloads configuration only.
-   *
-   * @returns Promise that resolves when reload is complete.
-   */
-  public async reload(): Promise<void> {
-    if (this.configManager) {
-      this.configManager.reload();
-      this._setConfigManager(this.configManager);
-
-      this._loggerManager.reload();
-      this._setLoggerManager(this._loggerManager);
+    // Get instance reports array
+    let instanceReports = serviceGroup.get(instance);
+    if (!instanceReports) {
+      instanceReports = [];
+      serviceGroup.set(instance, instanceReports);
     }
-  }
 
-  /**
-   * Restart the service. Restart performs stop, reload, and start in sequence.
-   *
-   * @returns Promise that resolves when restart is complete.
-   */
-  public async restart(): Promise<void> {
-    await this.stop();
-    await this.reload();
+    // Store the report
+    instanceReports.push(reportData);
 
-    await this.releaseResources();
-
-    await this._initializeMetrics();
-    await this.start();
-  }
-
-  /**
-   * Shuts down the service gracefully. Stops all services, frees allocated resources,
-   * and cleans up OpenTelemetry metrics.
-   *
-   * @returns Promise that resolves when shutdown is complete.
-   */
-  public async shutdown(): Promise<void> {
-    await this.stop();
-    await this.releaseResources();
-    this.logger.info(`${this.getArrowedIdentity()} shutdown complete.`);
-  }
-
-  /**
-   * Starts all services including TCP and UDP listeners.
-   *
-   * @returns Promise that resolves when initialization is complete.
-   */
-  public async start(): Promise<void> {
-    if (!this._initialized) {
-      this.logger.debug(`Initializing ${this.getArrowedIdentity()} ...`);
-      this.initialize();
-      this._initialized = true;
-      this.logger.debug(`${this.getArrowedIdentity()} initialized.`);
+    // Keep only last 60 reports to prevent memory bloat
+    if (instanceReports.length > 60) {
+      instanceReports.shift();
     }
-    this._setState(ServerState.Starting);
 
-    // Initialize all services including TCP and UDP listeners.
-    await this._initializeTcpListener("register");
+    this.logger.silly(
+      `${FOLLOW_UP}Report received from ${from}: RAM=${reportData.ramUsed}MB, Free=${reportData.ramFree}MB, CPU=${reportData.cpuLoad}%, NetTx=${reportData.netTx}`,
+    );
+  }
+
+  /**
+   * Gets the latest report for a specific provider instance.
+   *
+   * @param peer - The peer identity containing service name and instance ID
+   * @returns The latest ReportData or undefined if no reports exist
+   */
+  public getLatestReport(peer: PeerIdentity): ReportData | undefined {
+    const serviceGroup = this._reports.get(peer.service);
+    if (!serviceGroup) return undefined;
+
+    const instanceReports = serviceGroup.get(peer.instance);
+    if (!instanceReports || instanceReports.length === 0) return undefined;
+
+    return instanceReports[instanceReports.length - 1];
+  }
+
+  /**
+   * Handles service provider registration requests.
+   *
+   * @param data - The API call containing registration information
+   */
+  protected async registrar(data: ApiCall): Promise<void> {
+    const from = this.getPeerId(data);
+    this._putProvider(data);
+    this.logger.info(`${from} registered.`);
+  }
+
+  // --------------------------------------------
+  // Methods forced to be implemented on subclass.
+  // --------------------------------------------
+
+  /**
+   * Builds the access point information for the service manager.
+   * Adds the "register" and "report" API endpoints to the access point.
+   *
+   * @param baseInfo - Base access point information
+   * @returns Modified access point with API capabilities
+   */
+  protected buildAccessPointInfo(baseInfo: AccessPoint): AccessPoint {
+    baseInfo.api = ["register", "report"];
+    return baseInfo;
+  }
+
+  /**
+   * Initializes the API function map with ServiceManager-specific handlers.
+   * Overrides the parent implementation to register "register" and "report" handlers.
+   */
+  protected override initializeApiFunctionMap(): void {
+    super.initializeApiFunctionMap();
+    // Replace the standard function with the functions of the ServiceManager.
+    this.apis.register = this.registrar;
+    this.apis.report = this.gotReport;
+  }
+
+  /**
+   * No-op implementation - ServiceManager does not require additional resource initialization.
+   */
+  protected override async initializingResources(): Promise<void> {
+    return;
+  }
+
+  /**
+   * No-op implementation - ServiceManager does not require additional resource cleanup.
+   */
+  protected override async releasingResources(): Promise<void> {
+    return;
+  }
+
+  /**
+   * Disables service manager discovery when reloading configuration.
+   * Sets discovery mode to None to prevent redundant discovery operations.
+   */
+  protected override async reloading(): Promise<void> {
+    // Disable service manager discovery task.
+    const netConfig = this.configManager.getCoreConfig().net;
+    netConfig.sm_discovery = ServiceManagerDiscovery.None;
+    this.logger.debug(
+      `ServiceManager discovery task is disabled for ${this.getIdentity()}.`,
+    );
+  }
+
+  /**
+   * Starts the ServiceManager by enabling the API channel and initializing broadcast listener.
+   */
+  protected override async starting(): Promise<void> {
+    await this.setApiChannel(true);
     await this._initializeBroadcastListener("reception");
-
-    this.logger.info(`${this.getArrowedIdentity()} started successfully.`);
-    this._setState(ServerState.Running);
   }
 
   /**
-   * Stops all registered services.
-   *
-   * @returns Promise that resolves when all services have stopped.
+   * Stops the ServiceManager by disabling the API channel.
    */
-  public async stop(): Promise<void> {
-    this.logger.info("Stopping all services ...");
-    this._setState(ServerState.Stopping);
-    const wait: Promise<void>[] = [];
-
-    for (const [name, service] of this._services.entries()) {
-      if (typeof service.stop === "function") {
-        const stopPromise = service
-          .stop()
-          .then(() => {
-            this.logger.info(`Service <${name}> stopped successfully.`);
-          })
-          .catch((error: Error) => {
-            this.logger.error(
-              `Failed to stop service <${name}>: ${
-                error instanceof Error ? error.message : "Unknown error"
-              }`,
-            );
-          });
-        wait.push(stopPromise);
-      }
-    }
-
-    await Promise.all(wait);
-    this._services.clear();
-    this.logger.info(`${this.getArrowedIdentity()} stopped.`);
-    this._setState(ServerState.Stopped);
+  protected override async stopping(): Promise<void> {
+    await this.setApiChannel(false);
   }
 
   // --------------------------------------------
   // Private Methods
   // --------------------------------------------
-
-  private _collectServerInfo(): AccessPoint {
-    // Get TCP server information.
-    const tcpServerName = "register";
-    const tcpServer = this._services.get(tcpServerName);
-    if (!tcpServer) {
-      // || !(tcpServer instanceof TcpServer)
-      const message = `The <${tcpServerName}> TCP server not initiated.`;
-      this.logger.error(message);
-      throw new Error(message);
-    }
-
-    const server = tcpServer.getServer();
-    const addr = server?.address();
-    if (!addr || typeof addr !== "object") {
-      const message = `The <${tcpServerName}> TCP server not running.`;
-      this.logger.error(message);
-      throw new Error(message);
-    }
-
-    // Collect the server information.
-    const srvInfo: AccessPoint = {
-      authorization: "", // Authorization key for accessing this provider.
-      function: ["register", "report"], // Capbilities of the provider.
-      host: getHostIP(), // Host IP of the provider.
-      port: addr.port, // Port number the access point listening on.
-      protocol: NetworkProtocol.TCP, // Network protocol of the access point.
-    };
-    return srvInfo;
-  }
 
   /**
    * Initializes and starts a broadcast UDP listener for service discovery.
@@ -322,8 +325,9 @@ export class ServiceManager {
   private async _initializeBroadcastListener(name: string): Promise<void> {
     try {
       // Prepare the ServiceManager information.
-      const ap: AccessPoint = this._collectServerInfo();
-      const response: BroadcastResponse = {
+      const ap: AccessPoint = this.getTcpTaskInfo(ProviderTask.ChannelApi);
+      const appConfig = this.configManager.getAppConfig();
+      const response: BroadcastResponse260321 = {
         manager: {
           ...this.PROTOCOL,
           provider: {
@@ -331,17 +335,19 @@ export class ServiceManager {
             ...ap,
           },
         },
+        redis: appConfig.redis,
       };
 
       // Construct the UDP broadcast server.
       const broadcastServer = createNamedUdpServer(
+        this.configManager,
         name,
         TYPES.BroadcastUdpServer,
       ) as unknown as BroadcastUdpServer;
       broadcastServer.setManagerInfo(response);
 
       await broadcastServer.start();
-      this._services.set(name, broadcastServer);
+      this.tasks.set(name, broadcastServer);
     } catch (error) {
       this.logger.error(
         `Failed to initialize the <${name}> broadcast UDP listener: ${
@@ -352,100 +358,22 @@ export class ServiceManager {
     }
   }
 
-  private async _initializeMetrics(): Promise<void> {
-    // Initialize OpenTelemetry metrics with service resource attributes.
-    const resourceAttr: DetectedResourceAttributes = {
-      "service.name": this.PROTOCOL.provider.name,
-      "service.version": this.PROTOCOL.provider.version,
-      "service.instance.id": this.PROTOCOL.provider.id,
-      "protocol.version": this.PROTOCOL.protocol_ver,
-      "deployment.environment": getAppEnv() || AppEnv.development,
-    };
-    this._metrics = new OtelMeterics(resourceAttr);
-
-    this._metricsCallback = ServerStateMetric.createCallback();
-    listenerState.addCallback(this._metricsCallback);
-
-    ServerStateMetric.setInstanceState(
-      ServerState.Stopped,
-      this.PROTOCOL.provider.name,
-      this.PROTOCOL.provider.id,
-    );
-  }
-
   /**
-   * Initializes and starts a TCP listener.
+   * Stores provider registration information in the services registry.
    *
-   * @param name - Unique name for this listener.
-   * @returns Promise that resolves when the listener is started.
+   * @param data - The API call containing registration info
    */
-  private async _initializeTcpListener(name: string): Promise<void> {
-    try {
-      const tcpServer: TcpServer = createNamedTcpServer(name);
-      await tcpServer.start();
-      this._services.set(name, tcpServer);
-    } catch (error) {
-      this.logger.error(
-        `Failed to initialize the <${name}> TCP listener: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
-      );
-      throw error;
+  private _putProvider(data: ApiCall): void {
+    const args = data.args;
+    const { name: svcName, id: svcId } = args.provider;
+
+    // Asume the svcId is unique from all providers.
+    // Store this provider to the _services map.
+    let svcGroup = this._services.get(svcName);
+    if (!svcGroup) {
+      svcGroup = {};
+      this._services.set(svcName, svcGroup);
     }
-  }
-
-  /**
-   * Encapsulate jobs for setting ConfigManager.
-   *
-   * @param configManager
-   */
-  private _setConfigManager(configManager: ConfigManager) {
-    this.configManager = configManager;
-    this._updateServiceName();
-  }
-
-  /**
-   * Encapsulate jobs for setting LoggerManager.
-   *
-   * @param loggerManager
-   */
-  private _setLoggerManager(loggerManager: LoggerManager) {
-    // The initial / injected LoggerManager has no service_name set, so we need to reload it after updating the config.
-    loggerManager?.reload();
-
-    this._loggerManager = loggerManager;
-    this.logger = loggerManager?.getLogger() ?? (console as any); // Fallback to console if no loggerManager.
-  }
-
-  /**
-   * Sets the server state and updates the OpenTelemetry metric.
-   *
-   * @param state - The new server state to set.
-   * @remarks
-   * This method updates both the internal state and the OpenTelemetry observable gauge.
-   * The state change is logged and the metric is updated via the ServerStateMetric class.
-   */
-  private _setState(state: ServerState): void {
-    if (this._state !== state) {
-      // Update the server state metric for OpenTelemetry
-      ServerStateMetric.setState(state);
-
-      this.logger.info(
-        `${this.getArrowedIdentity()} state: ${this._state} → ${state}.`,
-      );
-      this._state = state;
-    }
-  }
-
-  private _updateServiceName() {
-    const coreConfig = this.configManager.getCoreConfig();
-    const svcName = coreConfig.service_name;
-    if (svcName && svcName !== UNKNOWN_ATTRIBUTE) {
-      // If service name is defined in config file, use it.
-      this.PROTOCOL.provider.name = svcName;
-    } else {
-      // Otherwise, set the service_name in the core configuration to the class name.
-      coreConfig.service_name = this.PROTOCOL.provider.name;
-    }
+    svcGroup[svcId] = args;
   }
 }

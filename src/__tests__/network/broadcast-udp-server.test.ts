@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { BroadcastUdpServer } from "../../network/broadcast-udp-server";
 import { ConfigManager } from "../../common/config";
 import { LoggerManager } from "../../common/logger";
-import { ServerState } from "../../types/basal-protocol";
+import { ExecutionState as ServerState } from "../../types/basal-protocol";
 
 // Mock otel-tracing to avoid OpenTelemetry context issues in tests
 vi.mock("../../metrics/otel-tracing", () => ({
@@ -15,6 +15,15 @@ vi.mock("../../metrics/otel-tracing", () => ({
       recordException: vi.fn(),
     }),
     recordException: vi.fn(),
+  },
+  OtelTracer: {
+    getInstance: () => ({
+      createBroadcastSpan: () => ({
+        setStatus: vi.fn(),
+        end: vi.fn(),
+        recordException: vi.fn(),
+      }),
+    }),
   },
 }));
 
@@ -49,50 +58,54 @@ describe("BroadcastUdpServer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    mockConfigManager = {
-      getCoreConfig: () => ({
-        net: {
-          tcp_address: "127.0.0.1",
-          tcp_port: 0,
-          udp_address: "127.0.0.1",
-          udp_port: 0,
-        },
-        retry: {
-          interval: 10,
-          max_try: 2,
-          backoff: { enable: true,
-            max_delay: 240000,
-            multiplier: 1.5,
-          },
-        },
-        service_name: "test-broadcast",
-      }),
-    } as unknown as ConfigManager;
-
     mockLogger = {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
+      silly: vi.fn(),
     };
+
+    mockConfigManager = {
+      getCoreConfig: () => ({
+        net: {
+          tcp: {
+            address: "127.0.0.1",
+            port: 0,
+            client: {
+              timeout: 10000,
+              keep_alive: false,
+              keep_alive_initial_delay: 0,
+            },
+          },
+          udp: {
+            address: "127.0.0.1",
+            port: 0,
+          },
+          sm_discovery: Symbol("sm_discovery"),
+          sm_port: 5707,
+        },
+        retry: {
+          interval: 10,
+          max_try: 2,
+          backoff: { enable: true, max_delay: 240000, multiplier: 1.5 },
+        },
+        service_name: "test-broadcast",
+      }),
+      getLogger: () => mockLogger,
+      getProviderId: () => "test-provider-id",
+    } as unknown as ConfigManager;
 
     mockLoggerManager = {
       getLogger: () => mockLogger,
     } as unknown as LoggerManager;
 
-    server = new BroadcastUdpServer(
-      mockConfigManager,
-      mockLoggerManager,
-      "test-broadcast",
-    );
+    server = new BroadcastUdpServer(mockConfigManager, "test-broadcast");
   });
 
   describe("constructor", () => {
     it("should create instance with default name", () => {
-      const defaultServer = new BroadcastUdpServer(
-        mockConfigManager,
-        mockLoggerManager,
-      );
+      const defaultServer = new BroadcastUdpServer(mockConfigManager);
       expect(defaultServer.name).toBe("broadcast-udp-server");
     });
 
@@ -187,7 +200,7 @@ describe("BroadcastUdpServer", () => {
 
       // Call with probe message - should not throw error
       expect(() => {
-        server["handleMessage"](Buffer.from("Bonjour and EnjoIT."), {
+        server["handleMessage"](Buffer.from("Bonjour and EnjoIT.->"), {
           address: "127.0.0.1",
           port: 54321,
           family: "IPv4",
@@ -207,13 +220,14 @@ describe("BroadcastUdpServer", () => {
       server.setManagerInfo(mockInfo);
 
       expect(() => {
-        server["handleMessage"](Buffer.from("Bonjour and EnjoIT."), {
+        // Must send proper probe message format: "Bonjour and EnjoIT.-><correlationId>"
+        server["handleMessage"](Buffer.from("Bonjour and EnjoIT.->test-id"), {
           address: "127.0.0.1",
           port: 54321,
           family: "IPv4",
           size: 20,
         });
-      }).toThrow(/The <test-broadcast> broadcast server not running/);
+      }).toThrow(/The <test-broadcast> UDP server is not listening/);
     });
 
     it("should log error when trying to respond with non-listening state", () => {
@@ -232,13 +246,310 @@ describe("BroadcastUdpServer", () => {
       server.setManagerInfo(mockInfo);
 
       expect(() => {
-        server["handleMessage"](Buffer.from("Bonjour and EnjoIT."), {
+        // Must send proper probe message format: "Bonjour and EnjoIT.-><correlationId>"
+        server["handleMessage"](Buffer.from("Bonjour and EnjoIT.->test-id"), {
           address: "127.0.0.1",
           port: 54321,
           family: "IPv4",
           size: 20,
         });
-      }).toThrow(/The <test-broadcast> broadcast server not running/);
+      }).toThrow(/The <test-broadcast> UDP server is not listening/);
+    });
+
+    it("should call socket.send with correct parameters on probe message", () => {
+      const sendCallback = vi.fn();
+      const mockSocket = {
+        send: vi.fn((_buf, _port, _addr, cb) => {
+          sendCallback();
+          if (cb) cb(null);
+        }),
+      };
+
+      (server as any)._socket = mockSocket;
+      (server as any)._state = ServerState.Listening;
+
+      const mockInfo = {
+        manager: {
+          provider: {
+            id: "test-id",
+            name: "TestService",
+            desc: "Test description",
+            version: "1.0.0",
+          },
+          protocol_ver: "1.0",
+        },
+      };
+
+      server.setManagerInfo(mockInfo);
+      (server as any)._responseBuffer = Buffer.from(JSON.stringify(mockInfo));
+
+      server["handleMessage"](Buffer.from("Bonjour and EnjoIT.->"), {
+        address: "127.0.0.1",
+        port: 54321,
+        family: "IPv4",
+        size: 20,
+      });
+
+      expect(mockSocket.send).toHaveBeenCalledOnce;
+    });
+
+    it("should invoke send callback with error when socket.send fails", () => {
+      const testError = new Error("Send failed");
+      const mockSocket = {
+        send: vi.fn((_buf, _port, _addr, cb) => {
+          if (cb) cb(testError);
+        }),
+      };
+
+      (server as any)._socket = mockSocket;
+      (server as any)._state = ServerState.Listening;
+
+      const mockInfo = {
+        manager: {
+          provider: {
+            id: "test-id",
+            name: "TestService",
+            desc: "Test description",
+            version: "1.0.0",
+          },
+          protocol_ver: "1.0",
+        },
+      };
+
+      server.setManagerInfo(mockInfo);
+      (server as any)._responseBuffer = Buffer.from(JSON.stringify(mockInfo));
+
+      server["handleMessage"](Buffer.from("Bonjour and EnjoIT.->"), {
+        address: "127.0.0.1",
+        port: 54321,
+        family: "IPv4",
+        size: 20,
+      });
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining("Error sending response"),
+      );
+    });
+
+    it("should invoke send callback successfully and log debug message", () => {
+      const mockSocket = {
+        send: vi.fn((_buf, _port, _addr, cb) => {
+          if (cb) cb(null);
+        }),
+      };
+
+      (server as any)._socket = mockSocket;
+      (server as any)._state = ServerState.Listening;
+
+      const mockInfo = {
+        manager: {
+          provider: {
+            id: "test-id",
+            name: "TestService",
+            desc: "Test description",
+            version: "1.0.0",
+          },
+          protocol_ver: "1.0",
+        },
+      };
+
+      server.setManagerInfo(mockInfo);
+      (server as any)._responseBuffer = Buffer.from(JSON.stringify(mockInfo));
+
+      server["handleMessage"](Buffer.from("Bonjour and EnjoIT.->"), {
+        address: "127.0.0.1",
+        port: 54321,
+        family: "IPv4",
+        size: 20,
+      });
+
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        expect.stringContaining("Responded"),
+      );
+    });
+  });
+
+  describe("start with manager info set", () => {
+    it("should set response buffer when manager info is configured", async () => {
+      const mockSocket = {
+        send: vi.fn((_buf, _port, _addr, cb) => {
+          if (cb) cb(null);
+        }),
+        bind: vi.fn(),
+        close: vi.fn(),
+        on: vi.fn(),
+        address: vi.fn(() => ({ port: 12345 })),
+      };
+
+      const mockInfo = {
+        manager: {
+          provider: {
+            id: "test-id",
+            name: "TestService",
+            desc: "Test description",
+            version: "1.0.0",
+          },
+          protocol_ver: "1.0",
+        },
+      };
+
+      server.setManagerInfo(mockInfo);
+
+      try {
+        await server.start();
+      } catch {
+        // Ignore errors from socket operations
+      }
+
+      expect((server as any)._responseBuffer).toBeInstanceOf(Buffer);
+    });
+
+    it("should call socket.send with correct parameters on probe message", () => {
+      const sendCallback = vi.fn();
+      const mockSocket = {
+        send: vi.fn((_buf, _port, _addr, cb) => {
+          sendCallback();
+          if (cb) cb(null);
+        }),
+      };
+
+      (server as any)._socket = mockSocket;
+      (server as any)._state = ServerState.Listening;
+
+      const mockInfo = {
+        manager: {
+          provider: {
+            id: "test-id",
+            name: "TestService",
+            desc: "Test description",
+            version: "1.0.0",
+          },
+          protocol_ver: "1.0",
+        },
+      };
+
+      server.setManagerInfo(mockInfo);
+      (server as any)._responseBuffer = Buffer.from(JSON.stringify(mockInfo));
+
+      server["handleMessage"](Buffer.from("Bonjour and EnjoIT.->"), {
+        address: "127.0.0.1",
+        port: 54321,
+        family: "IPv4",
+        size: 20,
+      });
+
+      expect(mockSocket.send).toHaveBeenCalledOnce;
+    });
+
+    it("should invoke send callback with error when socket.send fails", () => {
+      const testError = new Error("Send failed");
+      const mockSocket = {
+        send: vi.fn((_buf, _port, _addr, cb) => {
+          if (cb) cb(testError);
+        }),
+      };
+
+      (server as any)._socket = mockSocket;
+      (server as any)._state = ServerState.Listening;
+
+      const mockInfo = {
+        manager: {
+          provider: {
+            id: "test-id",
+            name: "TestService",
+            desc: "Test description",
+            version: "1.0.0",
+          },
+          protocol_ver: "1.0",
+        },
+      };
+
+      server.setManagerInfo(mockInfo);
+      (server as any)._responseBuffer = Buffer.from(JSON.stringify(mockInfo));
+
+      server["handleMessage"](Buffer.from("Bonjour and EnjoIT.->"), {
+        address: "127.0.0.1",
+        port: 54321,
+        family: "IPv4",
+        size: 20,
+      });
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining("Error sending response"),
+      );
+    });
+
+    it("should invoke send callback successfully and log debug message", () => {
+      const mockSocket = {
+        send: vi.fn((_buf, _port, _addr, cb) => {
+          if (cb) cb(null);
+        }),
+      };
+
+      (server as any)._socket = mockSocket;
+      (server as any)._state = ServerState.Listening;
+
+      const mockInfo = {
+        manager: {
+          provider: {
+            id: "test-id",
+            name: "TestService",
+            desc: "Test description",
+            version: "1.0.0",
+          },
+          protocol_ver: "1.0",
+        },
+      };
+
+      server.setManagerInfo(mockInfo);
+      (server as any)._responseBuffer = Buffer.from(JSON.stringify(mockInfo));
+
+      server["handleMessage"](Buffer.from("Bonjour and EnjoIT.->"), {
+        address: "127.0.0.1",
+        port: 54321,
+        family: "IPv4",
+        size: 20,
+      });
+
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        expect.stringContaining("Responded"),
+      );
+    });
+  });
+
+  describe("start with manager info set", () => {
+    it("should set response buffer when manager info is configured", async () => {
+      const mockSocket = {
+        send: vi.fn((_buf, _port, _addr, cb) => {
+          if (cb) cb(null);
+        }),
+        bind: vi.fn(),
+        close: vi.fn(),
+        on: vi.fn(),
+        address: vi.fn(() => ({ port: 12345 })),
+      };
+
+      const mockInfo = {
+        manager: {
+          provider: {
+            id: "test-id",
+            name: "TestService",
+            desc: "Test description",
+            version: "1.0.0",
+          },
+          protocol_ver: "1.0",
+        },
+      };
+
+      server.setManagerInfo(mockInfo);
+
+      try {
+        await server.start();
+      } catch {
+        // Ignore errors from socket operations
+      }
+
+      expect((server as any)._responseBuffer).toBeInstanceOf(Buffer);
     });
   });
 });

@@ -13,9 +13,14 @@
   "image": "reg.enjo.tech/dev-container/dev-tsnode:22-bookworm-amd64",
   // 2375 port : Docker daemon port for interactive from host.
   // 9999 port : Vitest UI port.
-  "forwardPorts": [3000, 3030, 4173, 5173, 8080, 8888, 9229, 9999],
+  "forwardPorts": [3000, 8080, 9229, 9999],
 
   "containerEnv": {
+    // // Access token for LLM and SonarLint. Or use [runArgs]: --env-file instead.
+    // "LOCAL_COMP_KEY": "${localEnv:LOCAL_COMP_KEY}",
+    // "LOCAL_LLM_KEY": "${localEnv:LOCAL_LLM_KEY}",
+    // "NVIDIA_API_KEY": "${localEnv:NVIDIA_API_KEY}",
+    // "SONAR_TOKEN": "${localEnv:SONAR_TOKEN}",
     "TZ": "Asia/Taipei"
   },
   "mounts": [
@@ -30,13 +35,13 @@
     // 2. Map each file and folder into the dev container.
     // 3. (Optional) Create volumes for sharing docker-in-docker and container contents.
     //      (issue "docker volume create dind containerd" in terminal).
-    "source=/home/dev_bind/lambda.theme.sh,target=/home/node/.oh-my-bash/custom/themes/lambda/lambda.theme.sh,type=bind",
     "source=/home/dev_bind/gitconfig,target=/home/node/.gitconfig,type=bind",
     "source=/home/dev_bind/ssh,target=/home/node/.ssh,type=bind",
     "source=containerd,target=/var/lib/containerd,type=volume",
     "source=dind,target=/var/lib/docker,type=volume"
   ],
   "runArgs": [
+    "--env-file=.devcontainer/devcontainer.env",
     "--dns-search=rd.enjo.tech",
     "--dns-search=enjo.tech",
     "--hostname=dev-rpc_js",
@@ -54,7 +59,6 @@
   // 6. Push the image to reg.enjo.tech.
   //    > docker push reg.enjo.tech/dev-container/dev-tsnode:22-bookworm-amd64
   // ===========================================
-
   // "features": {
   //   // "ghcr.io/devcontainers/features/docker-in-docker:2": {},
   //   "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {},
@@ -65,18 +69,18 @@
   // "customizations": {
   //   "vscode": {
   //     "extensions": [
-  //       "chakrounanas.turbo-console-log",
+  //       // "chakrounanas.turbo-console-log",
   //       "continue.continue",
   //       "crystal-spider.jsdoc-generator",
-  //       "donjayamanne.githistory",
+  //       // "donjayamanne.githistory",
   //       "eamodio.gitlens",
   //       "esbenp.prettier-vscode",
   //       "gitlab.gitlab-workflow",
   //       "inferrinizzard.prettier-sql-vscode",
-  //       "mhutchie.git-graph",
+  //       // "mhutchie.git-graph",
   //       "postman.postman-for-vscode",
   //       "sonarsource.sonarlint-vscode",
-  //       "sst-dev.opencode",
+  //       // "sst-dev.opencode",
   //       "yoavbls.pretty-ts-errors"
   //     ]
   //   }
@@ -84,6 +88,5 @@
 
   // Use 'postCreateCommand' to run commands after the container is created.
   // "postCreateCommand": ". /usr/local/share/nvm/nvm.sh && nvm alias default $NODE_VERSION && nvm use default",
-
   "remoteUser": "node"
 }

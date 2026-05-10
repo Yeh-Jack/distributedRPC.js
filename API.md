@@ -128,7 +128,7 @@ Clears all reports for a specific provider instance.
 #### `getReportedInstances(): PeerIdentity[]`
 Gets all registered services with their instance IDs.
 
-#### `getTcpServer(name: string): TcpServer | undefined`
+#### `getTaskTcpServer(name: string): TcpServer | undefined`
 Retrieves a registered TCP server by name.
 
 #### `getUdpServer(name: string): BroadcastUdpServer | undefined`
@@ -386,7 +386,7 @@ constructor(configManager: ConfigManager)
 |--------|---------|-------------|
 | `delay(ms: number)` | `Promise<void>` | Utility delay |
 | `getTcpClient(name: string, ap?: AccessPoint)` | `Promise<TcpClient>` | Create TCP client |
-| `getTcpServer(name: string)` | `Promise<TcpServer>` | Create TCP server |
+| `getTaskTcpServer(name: string)` | `Promise<TcpServer>` | Create TCP server |
 
 ---
 

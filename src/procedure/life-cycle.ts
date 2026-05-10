@@ -562,7 +562,7 @@ export class LifeCycleProcedure extends Procedure {
    * @returns The initialized TCP server
    */
   private async _setSystemChannel(subscribe: boolean): Promise<TcpServer> {
-    const task: TcpServer = await this._parent["getTcpServer"](
+    const task: TcpServer = await this._parent["getTaskTcpServer"](
       ProviderTask.ChannelSys,
     );
 

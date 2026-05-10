@@ -160,22 +160,12 @@ export class ServiceManager extends ServiceProvider {
   }
 
   /**
-   * Retrieves a registered TCP server by name.
-   *
-   * @param name - The name of the TCP server to retrieve.
-   * @returns The TcpServer instance or undefined if not found.
-   */
-  public getTcpServerTask(name: string): TcpServer | undefined {
-    return this.tasks.get(name) as TcpServer;
-  }
-
-  /**
    * Retrieves a registered UDP server by name.
    *
    * @param name - The name of the UDP server to retrieve.
    * @returns The BroadcastUdpServer instance or undefined if not found.
    */
-  public getUdpServerTask(name: string): BroadcastUdpServer | undefined {
+  public getTaskUdpServer(name: string): BroadcastUdpServer | undefined {
     return this.tasks.get(name) as BroadcastUdpServer | undefined;
   }
 

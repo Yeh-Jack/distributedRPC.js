@@ -575,7 +575,7 @@ export class ServiceProvider {
    * @param ap - AccessPoint containing address and port of the remote endpoint.
    * @returns Promise that resolves to the initialized TcpClient.
    */
-  protected async getTcpClient(
+  protected async getTaskTcpClient(
     name: string,
     ap?: AccessPoint,
   ): Promise<TcpClient> {
@@ -608,7 +608,7 @@ export class ServiceProvider {
    * @param name - Unique name for this task.
    * @returns Promise that resolves when the listener is started.
    */
-  protected async getTcpServer(name: string): Promise<TcpServer> {
+  protected async getTaskTcpServer(name: string): Promise<TcpServer> {
     try {
       let tcpServer: TcpServer = this.tasks.get(name);
       if (tcpServer) return tcpServer;
@@ -715,7 +715,9 @@ export class ServiceProvider {
    * @returns The initialized TCP server
    */
   protected async setApiChannel(subscribe: boolean): Promise<TcpServer> {
-    const task: TcpServer = await this.getTcpServer(ProviderTask.ChannelApi);
+    const task: TcpServer = await this.getTaskTcpServer(
+      ProviderTask.ChannelApi,
+    );
     if (subscribe) task.on(NetworkEvent.Data, this._handleTcpApiRequest);
     else task.off(NetworkEvent.Data, this._handleTcpApiRequest);
     return task;
@@ -728,7 +730,7 @@ export class ServiceProvider {
    * @returns The initialized TCP server
    */
   protected async setResponseChannel(subscribe: boolean): Promise<TcpServer> {
-    const task: TcpServer = await this.getTcpServer(
+    const task: TcpServer = await this.getTaskTcpServer(
       ProviderTask.ChannelResponse,
     );
     if (subscribe) task.on(NetworkEvent.Data, this._handleApiResponse);
@@ -923,25 +925,29 @@ export class ServiceProvider {
       return;
     }
 
-    // TODO
     try {
+      // Parse API path.
       const json: ApiCall = JSON.parse(data.toString());
       const apiPath = json.api
         .split("/") // Split the path by "/".
         .filter(Boolean); // Remove all "falsy" (false, 0, "", null, undefined, and NaN) elements.
-      let tier: any = this.apis; // this.apis holds nested dynamic assigned functions.
+
+      // Find the corresponding API object from nested apiPath tiers.
+      let api: any = this.apis; // this.apis holds nested dynamic assigned functions.
       for (const path of apiPath) {
-        if (!tier || typeof tier !== "object" || !(path in tier)) {
+        if (!api || typeof api !== "object" || !(path in api)) {
           this.logger.warn(`API not found: ${json.api}`);
           return;
         }
-        tier = tier[path];
+        api = api[path];
       }
-      if (typeof tier !== "function") {
+
+      // Make sure the api object is a function object.
+      if (typeof api !== "function") {
         this.logger.warn(`Invalid API path: ${json.api}`);
         return;
       }
-      tier.call(this, peer, json);
+      api.call(this, peer, json);
     } catch (err) {
       this.logger.warn(`Invalid request: Incorrect JSON format.\n${data}`);
     }
@@ -1035,7 +1041,7 @@ export class ServiceProvider {
 
     const jobs: Promise<any>[] = [];
     jobs.push(this._initializeOtel());
-    jobs.push(this.getTcpServer(ProviderTask.ChannelResponse));
+    jobs.push(this.getTaskTcpServer(ProviderTask.ChannelResponse));
     const result = await Promise.all(jobs);
     if (result.length > 1) this.setResponseChannel(true);
 

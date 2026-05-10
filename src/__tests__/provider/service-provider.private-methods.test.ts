@@ -205,7 +205,7 @@ describe("ServiceProvider Private Methods Coverage", () => {
 
   describe("_initializeResources", () => {
     it("should initialize TCP server and response channel", async () => {
-      vi.spyOn(provider as any, "getTcpServer").mockResolvedValue(
+      vi.spyOn(provider as any, "getTaskTcpServer").mockResolvedValue(
         {} as TcpServer,
       );
       vi.spyOn(provider as any, "setResponseChannel").mockResolvedValue(
@@ -214,7 +214,7 @@ describe("ServiceProvider Private Methods Coverage", () => {
 
       await (provider as any)._initializeResources();
 
-      expect((provider as any).getTcpServer).toHaveBeenCalledWith(
+      expect((provider as any).getTaskTcpServer).toHaveBeenCalledWith(
         "_chnResponse",
       );
       expect((provider as any).setResponseChannel).toHaveBeenCalledWith(true);
@@ -530,7 +530,7 @@ describe("ServiceProvider Private Methods Coverage", () => {
         on: vi.fn(),
         off: vi.fn(),
       };
-      vi.spyOn(provider as any, "getTcpServer").mockResolvedValue(mockServer as any);
+      vi.spyOn(provider as any, "getTaskTcpServer").mockResolvedValue(mockServer as any);
 
       await (provider as any).setApiChannel(true);
 
@@ -542,7 +542,7 @@ describe("ServiceProvider Private Methods Coverage", () => {
         on: vi.fn(),
         off: vi.fn(),
       };
-      vi.spyOn(provider as any, "getTcpServer").mockResolvedValue(mockServer as any);
+      vi.spyOn(provider as any, "getTaskTcpServer").mockResolvedValue(mockServer as any);
 
       await (provider as any).setApiChannel(false);
 
@@ -556,7 +556,7 @@ describe("ServiceProvider Private Methods Coverage", () => {
         on: vi.fn(),
         off: vi.fn(),
       };
-      vi.spyOn(provider as any, "getTcpServer").mockResolvedValue(mockServer as any);
+      vi.spyOn(provider as any, "getTaskTcpServer").mockResolvedValue(mockServer as any);
 
       await (provider as any).setResponseChannel(true);
 
@@ -568,7 +568,7 @@ describe("ServiceProvider Private Methods Coverage", () => {
         on: vi.fn(),
         off: vi.fn(),
       };
-      vi.spyOn(provider as any, "getTcpServer").mockResolvedValue(mockServer as any);
+      vi.spyOn(provider as any, "getTaskTcpServer").mockResolvedValue(mockServer as any);
 
       await (provider as any).setResponseChannel(false);
 

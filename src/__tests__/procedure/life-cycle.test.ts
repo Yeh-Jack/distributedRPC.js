@@ -92,7 +92,7 @@ describe("LifeCycleProcedure", () => {
       "PROTOCOL": { protocol_ver: "1.0.0", apis: {}, provider: { id: "test", name: "TestProvider", desc: "", version: "1.0.0" } },
       "_procedure": {},
       getTcpTaskInfo: vi.fn().mockReturnValue({ address: "127.0.0.1", port: 8080 }),
-      getTcpServer: vi.fn().mockResolvedValue(Object.create(TcpServer.prototype, { start: { value: vi.fn() }, stop: { value: vi.fn() } })),
+      getTaskTcpServer: vi.fn().mockResolvedValue(Object.create(TcpServer.prototype, { start: { value: vi.fn() }, stop: { value: vi.fn() } })),
       _setConfigManager: vi.fn(),
       _parseRequest: vi.fn().mockReturnValue({ apiSpec: {}, apiName: "test" }),
       _handleRequestError: vi.fn().mockReturnValue(AckValue.None),
@@ -441,7 +441,7 @@ describe("_setSystemChannel", () => {
         on: vi.fn(),
         off: vi.fn(),
       });
-      mockParent["getTcpServer"] = vi.fn().mockResolvedValue(mockTcpServer);
+      mockParent["getTaskTcpServer"] = vi.fn().mockResolvedValue(mockTcpServer);
 
       (lifeCycleProcedure as any)._parent = mockParent;
       (lifeCycleProcedure as any).context = createMockContext({ operation: "start" });
@@ -458,7 +458,7 @@ describe("_setSystemChannel", () => {
         on: vi.fn(),
         off: vi.fn(),
       });
-      mockParent["getTcpServer"] = vi.fn().mockResolvedValue(mockTcpServer);
+      mockParent["getTaskTcpServer"] = vi.fn().mockResolvedValue(mockTcpServer);
 
       (lifeCycleProcedure as any)._parent = mockParent;
       (lifeCycleProcedure as any).context = createMockContext({ operation: "start" });
